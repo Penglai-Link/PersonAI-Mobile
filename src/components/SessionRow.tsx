@@ -1,6 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import type { ChatSession } from "../api/tron";
+import { useI18n } from "../i18n";
 import { radius, spacing, typography, useTheme, useThemedStyles, type Palette } from "../theme";
 import { formatRelativeTime } from "../utils/format";
 import { Ionicons } from "./icons";
@@ -20,11 +21,12 @@ export function SessionRow({
 }: SessionRowProps) {
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
-  const title = session.title?.trim() || "未命名会话";
+  const { t, format } = useI18n();
+  const title = session.title?.trim() || t("未命名会话");
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`打开会话 ${title}`}
+      accessibilityLabel={format("打开会话：{title}", { title })}
       accessibilityState={{ selected: active }}
       onPress={onPress}
       style={({ pressed }) => [
@@ -50,7 +52,9 @@ export function SessionRow({
         </Text>
         <Text style={styles.meta} numberOfLines={1}>
           {formatRelativeTime(session.updatedAt)}
-          {session.lastRunStatus ? ` · ${runStatusLabel(session.lastRunStatus)}` : ""}
+          {session.lastRunStatus
+            ? ` · ${runStatusLabel(session.lastRunStatus, t)}`
+            : ""}
         </Text>
       </View>
       {active ? (
@@ -62,11 +66,20 @@ export function SessionRow({
   );
 }
 
-function runStatusLabel(status: string): string {
+function runStatusLabel(
+  status: string,
+  t: (source: string) => string,
+): string {
   const normalized = status.toUpperCase();
-  if (normalized === "RUNNING" || normalized === "IN_PROGRESS") return "运行中";
-  if (normalized === "FAILED" || normalized === "ERROR") return "运行失败";
-  if (normalized === "COMPLETED" || normalized === "SUCCEEDED") return "已完成";
+  if (normalized === "RUNNING" || normalized === "IN_PROGRESS") {
+    return t("运行中");
+  }
+  if (normalized === "FAILED" || normalized === "ERROR") {
+    return t("运行失败");
+  }
+  if (normalized === "COMPLETED" || normalized === "SUCCEEDED") {
+    return t("已完成");
+  }
   return status;
 }
 

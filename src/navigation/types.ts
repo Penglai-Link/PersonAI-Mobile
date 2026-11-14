@@ -3,7 +3,9 @@ import type { ChatSession } from "../api/tron";
 export type AddNodeMode = "scan" | "manual";
 
 export type RootStackParamList = {
-  /** Product picker — the mobile home screen. */
+  /** Default home screen: product/node/session overview. */
+  Dashboard: undefined;
+  /** Product picker and node-management entry point. */
   Products: undefined;
   /** Saved nodes (computers) of one product. */
   Nodes: { productCode: string };
@@ -15,6 +17,6 @@ export type RootStackParamList = {
     dudeCode?: string | null;
     dudeName?: string | null;
   };
-  /** Skin + light/dark preferences. */
-  Appearance: undefined;
+  /** Mobile theme, language and product definitions. */
+  Settings: undefined;
 };

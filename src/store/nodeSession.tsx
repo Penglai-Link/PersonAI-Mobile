@@ -10,6 +10,8 @@ import {
 } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 
+import { translate } from "../i18n";
+
 import {
   ApiError,
   SecurityError,
@@ -52,6 +54,14 @@ export interface NodeSessionContextValue {
   refreshAccessToken: () => Promise<string>;
   /** Runs an authenticated call; refreshes the JWT once on HTTP 401. */
   request: <T>(invoke: (connection: NodeConnection) => Promise<T>) => Promise<T>;
+  /**
+   * Runs an authenticated call against a specific saved node without changing
+   * the active node. The short-lived JWT is cached in memory per node.
+   */
+  requestForNode: <T>(
+    node: SavedNode,
+    invoke: (connection: NodeConnection) => Promise<T>,
+  ) => Promise<T>;
   /** Marks the node offline when the failure looks like a transport problem. */
   reportRequestError: (error: unknown) => void;
 }
@@ -60,7 +70,8 @@ const NodeSessionContext = createContext<NodeSessionContextValue | null>(null);
 
 const HEALTH_INTERVAL_MS = 15_000;
 const TOKEN_REFRESH_MARGIN_MS = 60_000;
-const OFFLINE_MESSAGE = "电脑离线，请确认电脑端 Tron 正在运行，并检查网络与节点地址。";
+const OFFLINE_MESSAGE =
+  "电脑离线，请确认电脑端 Tron 正在运行，并检查网络与节点地址。";
 const SECURITY_MESSAGE =
   "出于安全考虑，已阻止通过非 HTTPS 地址连接该节点。若这是可信局域网中的调试环境，请删除节点并使用“不安全调试”重新配对。";
 const TOKEN_EXPIRED_MESSAGE =
@@ -69,6 +80,10 @@ const TOKEN_EXPIRED_MESSAGE =
 interface CachedToken {
   accessToken: string;
   expiresAt: number;
+}
+
+function nodeTokenKey(node: SavedNode): string {
+  return `${node.id}|${node.baseUrl}|${node.allowInsecure ? 1 : 0}`;
 }
 
 export function NodeSessionProvider({ children }: { children: ReactNode }) {
@@ -90,6 +105,9 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
   const statusRef = useRef<NodeSessionStatus>("idle");
   const tokenRef = useRef<CachedToken | null>(null);
   const exchangingRef = useRef<Promise<string> | null>(null);
+  const nodeTokensRef = useRef(new Map<string, CachedToken>());
+  const nodeExchangesRef = useRef(new Map<string, Promise<string>>());
+  const nodeTokenEpochRef = useRef(0);
   const epochRef = useRef(0);
   const appStateRef = useRef<AppStateStatus | null>((AppState.currentState as AppStateStatus | null) ?? null);
 
@@ -134,7 +152,7 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
         setStatusValue("offline");
         bumpEpoch();
       }
-      setError(reason);
+      setError(translate(reason));
     },
     [bumpEpoch, clearToken, markNodeOffline, setStatusValue],
   );
@@ -143,7 +161,7 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
     async (options: { force?: boolean } = {}): Promise<string> => {
       const node = nodeRef.current;
       if (!node) {
-        throw new ApiError("尚未选择节点", { code: "NO_NODE" });
+        throw new ApiError(translate("尚未选择节点"), { code: "NO_NODE" });
       }
       const cached = tokenRef.current;
       if (
@@ -160,7 +178,7 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
         const pairingToken = await getPairingToken(node.id);
         if (!pairingToken) {
           throw new ApiError(
-            "这台节点的配对令牌已丢失，请删除后重新配对",
+            translate("这台节点的配对令牌已丢失，请删除后重新配对"),
             { code: "PAIRING_TOKEN_MISSING" },
           );
         }
@@ -170,7 +188,7 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
           timeoutMs: 12_000,
         });
         if (nodeRef.current?.id !== node.id) {
-          throw new ApiError("节点已切换", { code: "NODE_CHANGED" });
+          throw new ApiError(translate("节点已切换"), { code: "NODE_CHANGED" });
         }
         tokenRef.current = {
           accessToken: result.accessToken,
@@ -216,6 +234,83 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
       markOfflineState,
       setStatusValue,
     ],
+  );
+
+  const exchangeForNode = useCallback(
+    async (
+      node: SavedNode,
+      options: { force?: boolean } = {},
+    ): Promise<string> => {
+      const key = nodeTokenKey(node);
+      const cached = nodeTokensRef.current.get(key);
+      if (
+        !options.force &&
+        cached &&
+        cached.expiresAt - Date.now() > TOKEN_REFRESH_MARGIN_MS
+      ) {
+        return cached.accessToken;
+      }
+      const pending = nodeExchangesRef.current.get(key);
+      if (!options.force && pending) return pending;
+
+      const epoch = nodeTokenEpochRef.current;
+      const promise = (async () => {
+        assertTransportAllowed(node.baseUrl, node.allowInsecure);
+        const pairingToken = await getPairingToken(node.id);
+        if (!pairingToken) {
+          throw new ApiError(
+            translate("这台节点的配对令牌已丢失，请删除后重新配对"),
+            { code: "PAIRING_TOKEN_MISSING" },
+          );
+        }
+        const result = await createRemoteSession({
+          baseUrl: node.baseUrl,
+          pairingToken,
+          timeoutMs: 12_000,
+        });
+        if (epoch !== nodeTokenEpochRef.current) {
+          throw new ApiError(translate("请求已取消"), { code: "ABORTED" });
+        }
+        nodeTokensRef.current.set(key, {
+          accessToken: result.accessToken,
+          expiresAt: Date.now() + result.expiresIn * 1_000,
+        });
+        markNodeOnline(node.id);
+        return result.accessToken;
+      })();
+
+      nodeExchangesRef.current.set(key, promise);
+      try {
+        return await promise;
+      } catch (exchangeError) {
+        if (isTransportError(exchangeError)) markNodeOffline(node.id);
+        throw exchangeError;
+      } finally {
+        if (nodeExchangesRef.current.get(key) === promise) {
+          nodeExchangesRef.current.delete(key);
+        }
+      }
+    },
+    [getPairingToken, markNodeOffline, markNodeOnline],
+  );
+
+  const requestForNode = useCallback(
+    async <T,>(
+      node: SavedNode,
+      invoke: (connection: NodeConnection) => Promise<T>,
+    ): Promise<T> => {
+      const key = nodeTokenKey(node);
+      const token = await exchangeForNode(node);
+      try {
+        return await invoke({ baseUrl: node.baseUrl, token, node });
+      } catch (firstError) {
+        if (!isUnauthorizedError(firstError)) throw firstError;
+        nodeTokensRef.current.delete(key);
+        const secondToken = await exchangeForNode(node, { force: true });
+        return invoke({ baseUrl: node.baseUrl, token: secondToken, node });
+      }
+    },
+    [exchangeForNode],
   );
 
   const connect = useCallback(async () => {
@@ -286,7 +381,7 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
     ): Promise<T> => {
       const node = nodeRef.current;
       if (!node) {
-        throw new ApiError("尚未选择节点", { code: "NO_NODE" });
+        throw new ApiError(translate("尚未选择节点"), { code: "NO_NODE" });
       }
       const firstToken = await exchange();
       try {
@@ -332,6 +427,9 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
       }
       if (previous === "active") {
         clearToken();
+        nodeTokenEpochRef.current += 1;
+        nodeTokensRef.current.clear();
+        nodeExchangesRef.current.clear();
         setStatusValue("idle");
         setError(null);
         bumpEpoch();
@@ -380,6 +478,7 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
       ensureAccessToken,
       refreshAccessToken,
       request,
+      requestForNode,
       reportRequestError,
     }),
     [
@@ -395,6 +494,7 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
       refreshAccessToken,
       reportRequestError,
       request,
+      requestForNode,
       status,
     ],
   );

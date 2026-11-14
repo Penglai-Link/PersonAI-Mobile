@@ -32,6 +32,7 @@ import { Screen } from "../components/Screen";
 import { SegmentedControl } from "../components/SegmentedControl";
 import { TextField } from "../components/TextField";
 import { Ionicons } from "../components/icons";
+import { useI18n } from "../i18n";
 import type { AddNodeMode, RootStackParamList } from "../navigation/types";
 import { useConnections } from "../store/connections";
 import {
@@ -42,6 +43,7 @@ import {
   useThemedStyles,
   type Palette,
 } from "../theme";
+import { translate } from "../i18n";
 import { describeError, maskToken } from "../utils/format";
 import { parsePairingUri, type PairingInfo } from "../utils/pairing";
 
@@ -49,26 +51,31 @@ type Props = NativeStackScreenProps<RootStackParamList, "AddNode">;
 
 type ScanState = "scanning" | "parsed" | "invalid";
 
-const modeOptions: ReadonlyArray<{ value: AddNodeMode; label: string }> = [
-  { value: "scan", label: "扫码配对" },
-  { value: "manual", label: "手动输入" },
-];
-
 const SECURITY_BLOCK_MESSAGE =
   "出于安全考虑，已阻止通过非 HTTPS 地址连接。远程节点默认必须使用 https://；只有可信局域网中的调试节点，才可以在下方显式开启“不安全调试”并确认。";
 
 function confirmInsecureConnection(): Promise<boolean> {
-  const message =
-    "该节点使用非 HTTPS 地址，配对令牌、JWT 和聊天内容会以明文在网络上传输。只应在可信局域网或临时调试环境中使用。确定继续连接？";
+  const message = translate(
+    "该节点使用非 HTTPS 地址，配对令牌、JWT 和聊天内容会以明文在网络上传输。只应在可信局域网或临时调试环境中使用。确定继续连接？",
+  );
   if (Platform.OS === "web") {
     return Promise.resolve(
-      typeof window !== "undefined" && window.confirm(message),
+      typeof window !== "undefined" &&
+        window.confirm(`${translate("不安全调试")}\n\n${message}`),
     );
   }
   return new Promise((resolve) => {
-    Alert.alert("不安全调试", message, [
-      { text: "取消", style: "cancel", onPress: () => resolve(false) },
-      { text: "继续连接", style: "destructive", onPress: () => resolve(true) },
+    Alert.alert(translate("不安全调试"), message, [
+      {
+        text: translate("取消"),
+        style: "cancel",
+        onPress: () => resolve(false),
+      },
+      {
+        text: translate("继续连接"),
+        style: "destructive",
+        onPress: () => resolve(true),
+      },
     ]);
   });
 }
@@ -76,10 +83,17 @@ function confirmInsecureConnection(): Promise<boolean> {
 export function AddNodeScreen({ navigation, route }: Props) {
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const { t, format } = useI18n();
   const productCode = route.params.productCode;
   const { products, addProduct, saveNode } = useConnections();
 
-  const [mode, setMode] = useState<AddNodeMode>(route.params.mode ?? "scan");
+  const modeOptions: ReadonlyArray<{ value: AddNodeMode; label: string }> = [
+    { value: "scan", label: t("扫码配对") },
+    { value: "manual", label: t("手动输入") },
+  ];
+
+  const requestedMode = route.params.mode;
+  const [mode, setMode] = useState<AddNodeMode>(requestedMode ?? "scan");
   const [permission, requestPermission] = useCameraPermissions();
   const [torch, setTorch] = useState(false);
   const [scanState, setScanState] = useState<ScanState>("scanning");
@@ -148,8 +162,8 @@ export function AddNodeScreen({ navigation, route }: Props) {
           if (typeof window !== "undefined") window.alert(notice);
           goToNodes();
         } else {
-          Alert.alert("产品已自动纠正", notice, [
-            { text: "好", onPress: goToNodes },
+          Alert.alert(t("产品已自动纠正"), notice, [
+            { text: t("好"), onPress: goToNodes },
           ]);
         }
         return;
@@ -172,13 +186,13 @@ export function AddNodeScreen({ navigation, route }: Props) {
     }
     const trimmedToken = token.trim();
     if (!trimmedToken) {
-      setError("请输入配对令牌");
+      setError(t("请输入配对令牌"));
       return;
     }
 
     const insecure = !isSecureBaseUrl(normalizedBaseUrl);
     if (insecure && !allowInsecure) {
-      setError(SECURITY_BLOCK_MESSAGE);
+      setError(t(SECURITY_BLOCK_MESSAGE));
       return;
     }
     try {
@@ -190,7 +204,7 @@ export function AddNodeScreen({ navigation, route }: Props) {
     if (insecure) {
       const confirmed = await confirmInsecureConnection();
       if (!confirmed) {
-        setError("已取消不安全连接，未发送任何请求。");
+        setError(t("已取消不安全连接，未发送任何请求。"));
         return;
       }
     }
@@ -223,17 +237,30 @@ export function AddNodeScreen({ navigation, route }: Props) {
             });
           } catch (productError) {
             setError(
-              `该节点属于产品「${identity.productName || identityProductCode}」（${identityProductCode}），但无法自动创建该产品：${describeError(productError)}`,
+              format(
+                "该节点属于产品「{product}」（{code}），但无法自动创建该产品：{error}",
+                {
+                  product: identity.productName || identityProductCode,
+                  code: identityProductCode,
+                  error: describeError(productError),
+                },
+              ),
             );
             return;
           }
         }
-        notice = `该节点属于产品「${identity.productName || targetProductCode}」（${targetProductCode}），已自动归入该产品，而不是当前产品。`;
+        notice = format(
+          "该节点属于产品「{product}」（{code}），已自动归入该产品，而不是当前产品。",
+          {
+            product: identity.productName || targetProductCode,
+            code: targetProductCode,
+          },
+        );
       }
 
       await saveNode({
         productCode: targetProductCode,
-        name: name.trim() || identity.machineName?.trim() || "Tron 电脑",
+        name: name.trim() || identity.machineName?.trim() || t("Tron 电脑"),
         baseUrl: normalizedBaseUrl,
         pairingToken: trimmedToken,
         allowInsecure: insecure,
@@ -249,7 +276,9 @@ export function AddNodeScreen({ navigation, route }: Props) {
         connectionError instanceof ApiError &&
         (connectionError.status === 401 || connectionError.status === 403)
       ) {
-        setError("配对令牌无效或已过期，请在电脑端重新生成配对二维码");
+        setError(
+        t("配对令牌无效或已过期，请在电脑端重新生成配对二维码"),
+      );
       } else if (connectionError instanceof SecurityError) {
         setError(connectionError.message);
       } else {
@@ -291,35 +320,38 @@ export function AddNodeScreen({ navigation, route }: Props) {
                 <Ionicons name="checkmark" size={18} color={palette.accent} />
               </View>
               <View style={styles.successTitleBlock}>
-                <Text style={styles.successTitle}>已识别配对信息</Text>
-                <Text style={styles.successHint}>
-                  保存前会调用 /api/v1/remote/session 验证并记录产品与节点
+                <Text style={styles.successTitle}>
+                  {t("已识别配对信息")}
                 </Text>
               </View>
-              <Badge label="已扫描" tone="accent" />
+              <Badge label={t("已扫描")} tone="accent" />
             </View>
 
             <View style={styles.detailList}>
               <DetailRow
-                label="节点"
-                value={scanned.machineName || name || "未命名电脑"}
+                label={t("节点", "singular")}
+                value={scanned.machineName || name || t("未命名电脑")}
               />
-              <DetailRow label="地址" value={scanned.baseUrl} mono />
-              <DetailRow label="令牌" value={maskToken(scanned.token)} mono />
+              <DetailRow label={t("地址")} value={scanned.baseUrl} mono />
               <DetailRow
-                label="产品"
+                label={t("令牌")}
+                value={maskToken(scanned.token)}
+                mono
+              />
+              <DetailRow
+                label={t("产品", "singular")}
                 value={`${scanned.productName}（${scanned.productCode}）`}
               />
               {scanned.nodeId ? (
-                <DetailRow label="节点 ID" value={scanned.nodeId} mono />
+                <DetailRow label={t("节点 ID")} value={scanned.nodeId} mono />
               ) : null}
               <DetailRow
-                label="安全"
+                label={t("安全")}
                 value={
                   pairingInsecure
                     ? scanned.secure
-                      ? "HTTPS 未启用（配对标记为不安全）"
-                      : "非 HTTPS（配对标记为不安全）"
+                      ? t("HTTPS 未启用（配对标记为不安全）")
+                      : t("非 HTTPS（配对标记为不安全）")
                     : "HTTPS"
                 }
               />
@@ -327,9 +359,9 @@ export function AddNodeScreen({ navigation, route }: Props) {
 
             {pairingInsecure ? (
               <View style={styles.insecureBlock}>
-                <InlineBanner message={SECURITY_BLOCK_MESSAGE} />
+                <InlineBanner message={t(SECURITY_BLOCK_MESSAGE)} />
                 <ToggleRow
-                  label="我确认这是可信局域网中的不安全调试连接"
+                  label={t("我确认这是可信局域网中的不安全调试连接")}
                   value={confirmed}
                   onChange={setAllowInsecure}
                 />
@@ -338,7 +370,7 @@ export function AddNodeScreen({ navigation, route }: Props) {
 
             <View style={styles.scanActions}>
               <Button
-                label="连接并保存"
+                label={t("连接并保存")}
                 icon="link-outline"
                 loading={submitting}
                 disabled={pairingInsecure && !confirmed}
@@ -346,7 +378,7 @@ export function AddNodeScreen({ navigation, route }: Props) {
                 fullWidth
               />
               <Button
-                label="重新扫描"
+                label={t("重新扫描")}
                 icon="scan-outline"
                 variant="secondary"
                 onPress={resetScan}
@@ -357,17 +389,16 @@ export function AddNodeScreen({ navigation, route }: Props) {
           </Card>
 
           <TextField
-            label="节点名称（可选）"
+            label={t("节点名称（可选）")}
             value={name}
             onChangeText={setName}
-            placeholder="例如：书房 Mac"
+            placeholder={t("例如：书房 Mac")}
             autoCapitalize="none"
-            hint="留空时使用节点上报的机器名"
           />
           {error ? (
             <InlineBanner
               message={error}
-              actionLabel="重试"
+              actionLabel={t("重试")}
               onAction={() => void connect()}
             />
           ) : null}
@@ -380,11 +411,13 @@ export function AddNodeScreen({ navigation, route }: Props) {
         <View style={styles.stack}>
           <EmptyState
             icon="camera-outline"
-            title="摄像头不可用"
-            message={`${cameraError}\n你仍然可以使用手动输入完成配对。`}
+            title={t("摄像头不可用")}
+            message={format("{error}\n你仍然可以使用手动输入完成配对。", {
+              error: cameraError,
+            })}
             action={
               <Button
-                label="手动输入"
+                label={t("手动输入")}
                 icon="create-outline"
                 variant="secondary"
                 onPress={() => setMode("manual")}
@@ -396,7 +429,7 @@ export function AddNodeScreen({ navigation, route }: Props) {
     }
 
     if (!permission) {
-      return <LoadingView compact label="正在检查相机权限…" />;
+      return <LoadingView compact label={t("正在检查相机权限…")} />;
     }
 
     if (!permission.granted) {
@@ -404,12 +437,18 @@ export function AddNodeScreen({ navigation, route }: Props) {
         <View style={styles.stack}>
           <EmptyState
             icon="camera-outline"
-            title="需要相机权限"
-            message="PersonAI 使用相机扫描电脑端展示的配对二维码。你也可以直接手动输入地址和令牌。"
+            title={t("需要相机权限")}
+            message={t(
+              "PersonAI 使用相机扫描电脑端展示的配对二维码。你也可以直接手动输入地址和令牌。",
+            )}
             action={
               <View style={styles.emptyButtonColumn}>
                 <Button
-                  label={permission.canAskAgain ? "允许使用相机" : "打开系统设置"}
+                  label={
+                    permission.canAskAgain
+                      ? t("允许使用相机")
+                      : t("打开系统设置")
+                  }
                   icon="camera-outline"
                   onPress={() => {
                     if (permission.canAskAgain) {
@@ -421,7 +460,7 @@ export function AddNodeScreen({ navigation, route }: Props) {
                   fullWidth
                 />
                 <Button
-                  label="手动输入"
+                  label={t("手动输入")}
                   variant="secondary"
                   onPress={() => setMode("manual")}
                   fullWidth
@@ -445,16 +484,18 @@ export function AddNodeScreen({ navigation, route }: Props) {
               scanState === "scanning" ? handleBarcodeScanned : undefined
             }
             onMountError={(event) => {
-              setCameraError(event.message || "摄像头启动失败");
+              setCameraError(event.message || t("摄像头启动失败"));
             }}
           />
           <View pointerEvents="none" style={styles.scanOverlay}>
             <View style={styles.scanBox} />
-            <Text style={styles.scanInstruction}>将配对二维码放入框内</Text>
+            <Text style={styles.scanInstruction}>
+              {t("将配对二维码放入框内")}
+            </Text>
           </View>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={torch ? "关闭手电筒" : "打开手电筒"}
+            accessibilityLabel={torch ? t("关闭手电筒") : t("打开手电筒")}
             onPress={() => setTorch((value) => !value)}
             style={({ pressed }) => [styles.torchButton, pressed && styles.pressed]}
           >
@@ -470,7 +511,7 @@ export function AddNodeScreen({ navigation, route }: Props) {
           <View style={styles.stack}>
             {error ? <InlineBanner message={error} /> : null}
             <Button
-              label="重新扫描"
+              label={t("重新扫描")}
               icon="scan-outline"
               variant="secondary"
               onPress={resetScan}
@@ -479,7 +520,9 @@ export function AddNodeScreen({ navigation, route }: Props) {
           </View>
         ) : (
           <Text style={styles.scanHint}>
-            在电脑端 Tron 的“设置 → 通用 → 手机访问”中生成二维码，对准后自动识别。
+            {t(
+              "在电脑端打开配对二维码，对准后自动识别。",
+            )}
           </Text>
         )}
 
@@ -493,8 +536,13 @@ export function AddNodeScreen({ navigation, route }: Props) {
   return (
     <Screen>
       <AppHeader
-        title="添加节点"
-        subtitle={`产品 ${productCode} · 扫码或手动配对`}
+        title={
+          requestedMode
+            ? mode === "scan"
+              ? t("扫码配对")
+              : t("手动输入")
+            : t("添加节点")
+        }
         onBack={() => navigation.goBack()}
       />
 
@@ -507,14 +555,16 @@ export function AddNodeScreen({ navigation, route }: Props) {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <SegmentedControl
-            options={modeOptions}
-            value={mode}
-            onChange={(nextMode) => {
-              setMode(nextMode);
-              setError(null);
-            }}
-          />
+          {requestedMode && mode === requestedMode ? null : (
+            <SegmentedControl
+              options={modeOptions}
+              value={mode}
+              onChange={(nextMode) => {
+                setMode(nextMode);
+                setError(null);
+              }}
+            />
+          )}
 
           {mode === "scan" ? (
             renderScanPanel()
@@ -536,21 +586,6 @@ export function AddNodeScreen({ navigation, route }: Props) {
               onSubmit={() => void connect()}
             />
           )}
-
-          <Card style={styles.infoCard}>
-            <View style={styles.infoRow}>
-              <Ionicons
-                name="shield-checkmark-outline"
-                size={16}
-                color={palette.accent}
-              />
-              <Text style={styles.infoText}>
-                保存前会请求 POST /api/v1/remote/session 验证配对令牌并换取短期
-                JWT。配对令牌保存在系统安全存储，JWT 只保存在内存。远程节点默认必须使用
-                HTTPS；http:// 只有在显式确认“不安全调试”后才允许。
-              </Text>
-            </View>
-          </Card>
         </ScrollView>
       </KeyboardAvoidingView>
     </Screen>
@@ -592,38 +627,39 @@ function ManualPanel({
 }: ManualPanelProps) {
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const { t } = useI18n();
   return (
     <View style={styles.stack}>
       <TextField
-        label="节点名称（可选）"
+        label={t("节点名称（可选）")}
         value={name}
         onChangeText={onNameChange}
-        placeholder="例如：书房 Mac"
+        placeholder={t("例如：书房 Mac")}
         autoCapitalize="none"
-        hint="留空时使用节点上报的机器名"
       />
       <TextField
-        label="节点地址"
+        label={t("节点地址")}
         value={address}
         onChangeText={onAddressChange}
         placeholder="https://tron.example.com"
         autoCapitalize="none"
         autoCorrect={false}
         keyboardType="url"
-        hint="推荐 https:// 公网或反代地址；局域网调试可用 http://"
       />
       <TextField
-        label="配对令牌"
+        label={t("配对令牌")}
         value={token}
         onChangeText={onTokenChange}
-        placeholder="粘贴配对令牌"
+        placeholder={t("粘贴配对令牌")}
         autoCapitalize="none"
         autoCorrect={false}
         secureTextEntry={!showToken}
         rightAccessory={
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={showToken ? "隐藏令牌" : "显示令牌"}
+            accessibilityLabel={
+              showToken ? t("隐藏令牌") : t("显示令牌")
+            }
             onPress={onToggleToken}
             hitSlop={8}
           >
@@ -638,9 +674,9 @@ function ManualPanel({
 
       {insecureAddress ? (
         <View style={styles.insecureBlock}>
-          <InlineBanner message={SECURITY_BLOCK_MESSAGE} />
+          <InlineBanner message={t(SECURITY_BLOCK_MESSAGE)} />
           <ToggleRow
-            label="不安全调试：允许通过 http:// 连接该节点"
+            label={t("不安全调试：允许通过 http:// 连接该节点")}
             value={allowInsecure}
             onChange={onToggleInsecure}
           />
@@ -650,16 +686,13 @@ function ManualPanel({
       {error ? <InlineBanner message={error} /> : null}
 
       <Button
-        label="验证并保存"
+        label={t("验证并保存")}
         icon="link-outline"
         loading={submitting}
         disabled={insecureAddress && !allowInsecure}
         onPress={onSubmit}
         fullWidth
       />
-      <Text style={styles.manualHint}>
-        保存前会用配对令牌换取 JWT 并读取节点 identity，验证通过后才保存。
-      </Text>
     </View>
   );
 }
@@ -788,12 +821,6 @@ const createStyles = (c: Palette) =>
       ...typography.caption,
       textAlign: "center",
       lineHeight: 18,
-    },
-    manualHint: {
-      color: c.muted,
-      ...typography.caption,
-      lineHeight: 18,
-      textAlign: "center",
     },
     successCard: {
       gap: spacing.lg,

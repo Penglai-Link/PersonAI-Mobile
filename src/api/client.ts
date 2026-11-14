@@ -1,5 +1,7 @@
 import { fetch as expoFetch } from "expo/fetch";
 
+import { formatMessage, translate } from "../i18n";
+
 export type QueryValue = string | number | boolean | null | undefined;
 export type QueryParams = Record<string, QueryValue>;
 
@@ -27,7 +29,7 @@ export class ApiError extends Error {
 }
 
 export class TimeoutError extends Error {
-  constructor(message = "连接超时，请检查电脑地址和网络") {
+  constructor(message = translate("连接超时，请检查电脑地址和网络")) {
     super(message);
     this.name = "TimeoutError";
   }
@@ -39,7 +41,9 @@ export class TimeoutError extends Error {
  */
 export class SecurityError extends Error {
   constructor(
-    message = "出于安全考虑，PersonAI 只允许通过 HTTPS 连接远程节点。如果这是可信局域网中的调试环境，请在添加节点时显式开启“不安全调试”。",
+    message = translate(
+      "出于安全考虑，PersonAI 只允许通过 HTTPS 连接远程节点。如果这是可信局域网中的调试环境，请在添加节点时显式开启“不安全调试”。",
+    ),
   ) {
     super(message);
     this.name = "SecurityError";
@@ -51,7 +55,7 @@ export class SecurityError extends Error {
  * The Chat screen turns this into the documented non-streaming fallback.
  */
 export class StreamUnsupportedError extends Error {
-  constructor(message = "当前环境不支持流式响应") {
+  constructor(message = translate("当前环境不支持流式响应")) {
     super(message);
     this.name = "StreamUnsupportedError";
   }
@@ -73,26 +77,32 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
  */
 export function normalizeBaseUrl(input: string): string {
   const raw = input.trim();
-  if (!raw) throw new Error("请输入节点地址");
+  if (!raw) throw new Error(translate("请输入节点地址"));
 
   const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw);
   const withScheme = hasScheme ? raw : `http://${raw}`;
 
   if (!/^https?:\/\//i.test(withScheme)) {
-    throw new Error("仅支持 https:// 地址；调试可信局域网时可显式允许 http://");
+    throw new Error(
+      translate("仅支持 https:// 地址；调试可信局域网时可显式允许 http://"),
+    );
   }
 
   const match = /^(https?):\/\/([^/?#\s]+)([^?#\s]*)$/i.exec(withScheme);
   if (!match) {
-    throw new Error("地址格式不正确，例如 https://tron.example.com");
+    throw new Error(
+      translate("地址格式不正确，例如 https://tron.example.com"),
+    );
   }
 
   const [, scheme, host, path] = match;
   if (!host || host.includes("@")) {
-    throw new Error("地址格式不正确，例如 https://192.168.1.10:3000");
+    throw new Error(
+      translate("地址格式不正确，例如 https://192.168.1.10:3000"),
+    );
   }
   if (path.includes("?") || path.includes("#")) {
-    throw new Error("节点地址不能包含查询参数或锚点");
+    throw new Error(translate("节点地址不能包含查询参数或锚点"));
   }
 
   return `${scheme.toLowerCase()}://${host}${path}`.replace(/\/+$/, "");
@@ -189,7 +199,7 @@ interface RawRequestParams {
 
 async function requestRaw(params: RawRequestParams): Promise<Response> {
   if (params.signal?.aborted) {
-    throw new ApiError("请求已取消", { code: "ABORTED" });
+    throw new ApiError(translate("请求已取消"), { code: "ABORTED" });
   }
   const controller = new AbortController();
   let timedOut = false;
@@ -216,7 +226,7 @@ async function requestRaw(params: RawRequestParams): Promise<Response> {
   } catch (error) {
     if (timedOut) throw new TimeoutError();
     if (params.signal?.aborted) {
-      throw new ApiError("请求已取消", { code: "ABORTED" });
+      throw new ApiError(translate("请求已取消"), { code: "ABORTED" });
     }
     throw error;
   } finally {
@@ -243,7 +253,9 @@ export async function requestTronJson<T>(
     envelope && typeof envelope.message === "string"
       ? envelope.message.trim()
       : "";
-  const message = serverMessage || `请求失败（HTTP ${response.status}）`;
+  const message =
+    serverMessage ||
+    formatMessage("请求失败（HTTP {status}）", { status: response.status });
   const data = envelope ? envelope.data : undefined;
 
   if (!response.ok) {
@@ -254,7 +266,7 @@ export async function requestTronJson<T>(
     });
   }
   if (!envelope || !code) {
-    throw new ApiError("服务器返回了无法解析的响应", {
+    throw new ApiError(translate("服务器返回了无法解析的响应"), {
       status: response.status,
     });
   }
@@ -276,7 +288,9 @@ export async function readStreamError(response: Response): Promise<ApiError> {
   const message =
     envelope && typeof envelope.message === "string" && envelope.message.trim()
       ? envelope.message
-      : `请求失败（HTTP ${response.status}）`;
+      : formatMessage("请求失败（HTTP {status}）", {
+          status: response.status,
+        });
   return new ApiError(message, {
     code,
     status: response.status,

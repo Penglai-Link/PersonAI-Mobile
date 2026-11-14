@@ -10,10 +10,11 @@ import {
   readStreamError,
   requestTronJson,
 } from "./client";
+import { translate } from "../i18n";
 import { extractSseFrames, parseSseFrame, type SseFrame } from "./sse";
 
 export const TRON_PRODUCT_CODE = "tron";
-export const TRON_PRODUCT_NAME = "Tron";
+export const TRON_PRODUCT_NAME = "Tron Harness";
 
 export interface RemoteProfile {
   username: string;
@@ -97,6 +98,16 @@ export interface ProjectRecord {
   workspaceCode: string;
   name: string;
   updatedAt: string;
+}
+
+export interface DirectoryRecord {
+  directoryCode: string;
+  workspaceCode: string;
+  executionHost: string;
+  path: string;
+  name: string;
+  parentDirectoryCode: string | null;
+  available: boolean;
 }
 
 export type ChatMessageRole = "USER" | "ASSISTANT" | string;
@@ -235,7 +246,7 @@ function normalizeSkin(value: unknown): Skin | null {
  */
 export function normalizeIdentity(value: unknown): RemoteIdentity {
   if (!isRecord(value)) {
-    throw new ApiError("电脑返回的 identity 信息不完整", {
+    throw new ApiError(translate("电脑返回的 identity 信息不完整"), {
       code: "INVALID_IDENTITY",
     });
   }
@@ -245,7 +256,7 @@ export function normalizeIdentity(value: unknown): RemoteIdentity {
     ? value.nodeId.trim()
     : null;
   if (!machineName && !nodeId) {
-    throw new ApiError("电脑返回的 identity 信息不完整", {
+    throw new ApiError(translate("电脑返回的 identity 信息不完整"), {
       code: "INVALID_IDENTITY",
     });
   }
@@ -305,14 +316,14 @@ export async function createRemoteSession(params: {
     signal: params.signal,
   });
   if (!isRecord(data)) {
-    throw new ApiError("电脑没有返回有效的访问令牌", {
+    throw new ApiError(translate("电脑没有返回有效的访问令牌"), {
       code: "INVALID_SESSION",
     });
   }
   const accessToken =
     typeof data.accessToken === "string" ? data.accessToken.trim() : "";
   if (!accessToken) {
-    throw new ApiError("电脑没有返回有效的访问令牌", {
+    throw new ApiError(translate("电脑没有返回有效的访问令牌"), {
       code: "INVALID_SESSION",
     });
   }
@@ -355,7 +366,9 @@ export async function checkHealth(params: {
     signal: params.signal,
   });
   if (!isRecord(data) || typeof data.status !== "string") {
-    throw new ApiError("健康检查响应无效", { code: "INVALID_HEALTH" });
+    throw new ApiError(translate("健康检查响应无效"), {
+      code: "INVALID_HEALTH",
+    });
   }
   return {
     status: data.status,
@@ -424,7 +437,7 @@ export async function createMainDudeSession(
     timeoutMs: 45_000,
     signal: params.signal,
   });
-  return requireChatSession(data, "电脑没有返回有效的 Dude 会话");
+  return requireChatSession(data, translate("电脑没有返回有效的 Dude 会话"));
 }
 
 export async function createDudeSession(
@@ -439,7 +452,7 @@ export async function createDudeSession(
     timeoutMs: 45_000,
     signal: params.signal,
   });
-  return requireChatSession(data, "电脑没有返回有效的 Dude 会话");
+  return requireChatSession(data, translate("电脑没有返回有效的 Dude 会话"));
 }
 
 export async function listWorkspaceOptions(
@@ -472,6 +485,45 @@ export async function listProjects(
   return Array.isArray(data) ? data : [];
 }
 
+function normalizeDirectory(value: unknown): DirectoryRecord | null {
+  if (!isRecord(value) || typeof value.directoryCode !== "string") return null;
+  return {
+    directoryCode: value.directoryCode,
+    workspaceCode:
+      typeof value.workspaceCode === "string" ? value.workspaceCode : "",
+    executionHost:
+      typeof value.executionHost === "string" ? value.executionHost : "",
+    path: typeof value.path === "string" ? value.path : "",
+    name:
+      typeof value.name === "string" && value.name.trim()
+        ? value.name
+        : value.directoryCode,
+    parentDirectoryCode:
+      typeof value.parentDirectoryCode === "string"
+        ? value.parentDirectoryCode
+        : null,
+    available: value.available !== false,
+  };
+}
+
+/** `GET /api/v1/directories?workspaceCode=...` — registered directories. */
+export async function listDirectories(
+  params: ApiParams & { workspaceCode: string },
+): Promise<DirectoryRecord[]> {
+  const data = await requestTronJson<unknown>({
+    baseUrl: params.baseUrl,
+    token: params.token,
+    path: "/api/v1/directories",
+    query: { workspaceCode: params.workspaceCode },
+    timeoutMs: 20_000,
+    signal: params.signal,
+  });
+  if (!Array.isArray(data)) return [];
+  return data
+    .map((entry) => normalizeDirectory(entry))
+    .filter((entry): entry is DirectoryRecord => entry !== null);
+}
+
 export async function listSessionGroups(
   params: ApiParams & { workspaceCode: string },
 ): Promise<ChatSessionGroup[]> {
@@ -499,7 +551,7 @@ export async function createChatSession(
     timeoutMs: 20_000,
     signal: params.signal,
   });
-  return requireChatSession(data, "电脑没有返回有效的新会话");
+  return requireChatSession(data, translate("电脑没有返回有效的新会话"));
 }
 
 export async function listChatMessages(
@@ -568,11 +620,11 @@ export async function sendChatMessageStream(
   params: StreamChatParams,
 ): Promise<ChatSendResult> {
   if (params.signal?.aborted) {
-    throw new ApiError("请求已取消", { code: "ABORTED" });
+    throw new ApiError(translate("请求已取消"), { code: "ABORTED" });
   }
   const controller = new AbortController();
   let timedOut = false;
-  let timedOutMessage = "回复超时，请稍后重试";
+  let timedOutMessage = translate("回复超时，请稍后重试");
   let timer: ReturnType<typeof setTimeout> | null = null;
 
   const armTimeout = (ms: number, message: string) => {
@@ -586,7 +638,7 @@ export async function sendChatMessageStream(
 
   const abortFromCaller = () => controller.abort();
   params.signal?.addEventListener("abort", abortFromCaller);
-  armTimeout(60_000, "等待回复超时，请检查电脑连接");
+  armTimeout(60_000, translate("等待回复超时，请检查电脑连接"));
 
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
@@ -616,7 +668,7 @@ export async function sendChatMessageStream(
       throw new StreamUnsupportedError();
     }
 
-    armTimeout(120_000, "流式回复长时间没有响应");
+    armTimeout(120_000, translate("流式回复长时间没有响应"));
     reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -647,7 +699,7 @@ export async function sendChatMessageStream(
             ? payload.message
             : typeof payload.code === "string" && payload.code.trim()
               ? payload.code
-              : "回复失败，请重试";
+              : translate("回复失败，请重试");
         throw new ApiError(message, {
           code:
             typeof payload.code === "string" ? payload.code : "RUN_ERROR",
@@ -662,7 +714,7 @@ export async function sendChatMessageStream(
       const { done, value } = await reader.read();
       if (done) break;
       if (value) {
-        armTimeout(120_000, "流式回复长时间没有响应");
+        armTimeout(120_000, translate("流式回复长时间没有响应"));
         buffer += decoder.decode(value, { stream: true });
         const { frames, rest } = extractSseFrames(buffer);
         buffer = rest;
@@ -677,13 +729,13 @@ export async function sendChatMessageStream(
     if (trailingFrame) consumeFrame(trailingFrame);
 
     if (!result) {
-      throw new Error("流式连接意外结束，请重试");
+      throw new Error(translate("流式连接意外结束，请重试"));
     }
     return result;
   } catch (error) {
     if (timedOut) throw new TimeoutError(timedOutMessage);
     if (params.signal?.aborted) {
-      throw new ApiError("已停止接收回复", { code: "ABORTED" });
+      throw new ApiError(translate("已停止接收回复"), { code: "ABORTED" });
     }
     throw error;
   } finally {
@@ -698,12 +750,12 @@ export async function sendChatMessageStream(
 function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
-      reject(new ApiError("请求已取消", { code: "ABORTED" }));
+      reject(new ApiError(translate("请求已取消"), { code: "ABORTED" }));
       return;
     }
     const onAbort = () => {
       clearTimeout(timer);
-      reject(new ApiError("请求已取消", { code: "ABORTED" }));
+      reject(new ApiError(translate("请求已取消"), { code: "ABORTED" }));
     };
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);

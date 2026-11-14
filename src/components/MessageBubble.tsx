@@ -1,5 +1,6 @@
 import { StyleSheet, Text, View } from "react-native";
 
+import { useI18n } from "../i18n";
 import { radius, spacing, typography, useThemedStyles, type Palette } from "../theme";
 
 interface MessageBubbleProps {
@@ -16,6 +17,7 @@ export function MessageBubble({
   pending = false,
 }: MessageBubbleProps) {
   const styles = useThemedStyles(createStyles);
+  const { t } = useI18n();
   const isUser = role === "USER";
   const showWaiting = pending && !content.trim();
 
@@ -45,7 +47,7 @@ export function MessageBubble({
       </View>
       <View style={[styles.bubble, styles.assistantBubble]}>
         {showWaiting ? (
-          <Text style={styles.waiting}>正在思考…</Text>
+          <Text style={styles.waiting}>{t("正在思考…")}</Text>
         ) : (
           <Text selectable style={[styles.assistantText, styles.text]}>
             {content}

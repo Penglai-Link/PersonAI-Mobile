@@ -1,18 +1,48 @@
 /**
- * Maps the desktop skin CSS variables onto the mobile palette.
+ * PersonAI Mobile's own color system.
  *
- * A skin from `GET /api/v1/system/skins` exposes two variants of CSS custom
- * properties. Only documented color variables are consumed here; missing or
- * unparseable values fall back to the built-in palettes so an unknown/new skin
- * never breaks the UI.
+ * Themes are built into the app and never read from a node. A theme only
+ * replaces the accent pair; surfaces, text and semantic colors stay on the
+ * mobile palette so the two modes keep their contrast.
  */
 
 export type ThemeMode = "light" | "dark" | "system";
 export type ResolvedMode = "light" | "dark";
+export type MobileThemeId = "default" | "ocean" | "violet" | "amber";
 
-import type { Skin } from "../api/tron";
+export interface MobileThemePreset {
+  id: MobileThemeId;
+  name: { zh: string; en: string };
+  accent: Record<ResolvedMode, string>;
+  onAccent: Record<ResolvedMode, string>;
+}
 
-export type { Skin };
+export const mobileThemes: readonly MobileThemePreset[] = [
+  {
+    id: "default",
+    name: { zh: "默认", en: "Default" },
+    accent: { dark: "#22D3EE", light: "#5861A6" },
+    onAccent: { dark: "#041014", light: "#FFFFFF" },
+  },
+  {
+    id: "ocean",
+    name: { zh: "海蓝", en: "Ocean" },
+    accent: { dark: "#38BDF8", light: "#1D4ED8" },
+    onAccent: { dark: "#04131A", light: "#FFFFFF" },
+  },
+  {
+    id: "violet",
+    name: { zh: "紫罗兰", en: "Violet" },
+    accent: { dark: "#A78BFA", light: "#7C3AED" },
+    onAccent: { dark: "#140B26", light: "#FFFFFF" },
+  },
+  {
+    id: "amber",
+    name: { zh: "琥珀", en: "Amber" },
+    accent: { dark: "#FBBF24", light: "#B45309" },
+    onAccent: { dark: "#1A1204", light: "#FFFFFF" },
+  },
+];
 
 export interface Palette {
   mode: ResolvedMode;
@@ -262,16 +292,7 @@ export const fallbackPalettes: Record<ResolvedMode, Palette> = {
   },
 };
 
-export function skinColors(
-  skin: Skin | null | undefined,
-  mode: ResolvedMode,
-): Record<string, string> | null {
-  if (!skin || !skin.variants) return null;
-  const variant = mode === "dark" ? skin.variants.dark : skin.variants.light;
-  return variant && typeof variant === "object" ? variant : null;
-}
-
-/** Builds the runtime palette for a skin variant, falling back to built-ins. */
+/** Builds the runtime palette from optional color overrides. */
 export function createPalette(
   mode: ResolvedMode,
   colors: Record<string, string> | null = null,

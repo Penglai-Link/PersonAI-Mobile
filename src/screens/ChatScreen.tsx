@@ -34,6 +34,7 @@ import { MessageBubble } from "../components/MessageBubble";
 import { Screen } from "../components/Screen";
 import { SessionRow } from "../components/SessionRow";
 import { Ionicons } from "../components/icons";
+import { useI18n } from "../i18n";
 import type { RootStackParamList } from "../navigation/types";
 import { useConnections } from "../store/connections";
 import { useNodeSession } from "../store/nodeSession";
@@ -60,6 +61,7 @@ function sortByUpdatedDesc(left: ChatSession, right: ChatSession): number {
 export function ChatScreen({ navigation, route }: Props) {
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const { t, format } = useI18n();
   const { currentNode: computer } = useConnections();
   const {
     status: sessionStatus,
@@ -84,7 +86,9 @@ export function ChatScreen({ navigation, route }: Props) {
       ? (session.sourceCode ?? null)
       : null);
   const dudeName = route.params.dudeName ?? null;
-  const title = session.title?.trim() || (dudeName ? `与 ${dudeName} 的会话` : "新会话");
+  const title =
+    session.title?.trim() ||
+    (dudeName ? format("与 {name} 的会话", { name: dudeName }) : t("新会话"));
   const baseUrl = computer?.baseUrl ?? "";
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -244,7 +248,7 @@ export function ChatScreen({ navigation, route }: Props) {
     const content = input.trim();
     if (!content || sending) return;
     if (!baseUrl || !workspaceCode || sessionStatus !== "online") {
-      setError("连接信息缺失或电脑离线，请返回重新连接节点");
+      setError(t("连接信息缺失或电脑离线，请返回重新连接节点"));
       return;
     }
 
@@ -352,7 +356,7 @@ export function ChatScreen({ navigation, route }: Props) {
       if (sendError instanceof StreamUnsupportedError) {
         // Documented fallback: plain POST + message polling when the runtime
         // cannot expose a readable streaming body.
-        setNotice("当前环境不支持流式响应，正在切换为普通发送模式。");
+        setNotice(t("当前环境不支持流式响应，正在切换为普通发送模式。"));
         try {
           const fallback = await sessionRequest(({ baseUrl: requestBaseUrl, token }) =>
             sendChatMessage({
@@ -455,12 +459,12 @@ export function ChatScreen({ navigation, route }: Props) {
         >
           <AppHeader
             title={title}
-            subtitle={dudeName ? `Dude · ${dudeName}` : "会话"}
+            subtitle={dudeName ? `Dude · ${dudeName}` : t("会话", "chat")}
             onBack={() => navigation.goBack()}
             right={
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="刷新消息"
+                accessibilityLabel={t("刷新消息")}
                 accessibilityState={{ disabled: sending || loading || offline }}
                 disabled={sending || loading || offline}
                 onPress={() => void loadMessages(true)}
@@ -480,14 +484,16 @@ export function ChatScreen({ navigation, route }: Props) {
           <View style={styles.offlineWrap}>
             <EmptyState
               icon="cloud-offline-outline"
-              title="电脑离线"
+              title={t("电脑离线")}
               message={
                 sessionError ??
-                "无法连接这台电脑，已清空当前会话内容。请确认电脑端 Tron 在运行，并检查网络与节点地址。"
+                t(
+                  "无法连接这台电脑，已清空当前会话内容。请确认电脑端 Tron 在运行，并检查网络与节点地址。",
+                )
               }
               action={
                 <Button
-                  label="重新连接"
+                  label={t("重新连接")}
                   icon="refresh"
                   onPress={() => void probeNow()}
                 />
@@ -499,7 +505,7 @@ export function ChatScreen({ navigation, route }: Props) {
             {wide ? (
               <View style={styles.sidebar}>
                 <View style={styles.sidebarHeader}>
-                  <Text style={styles.sidebarTitle}>随聊</Text>
+                  <Text style={styles.sidebarTitle}>{t("随聊")}</Text>
                   <Text style={styles.sidebarCount}>{sidebarSessions.length}</Text>
                 </View>
                 {sidebarLoading ? (
@@ -520,7 +526,9 @@ export function ChatScreen({ navigation, route }: Props) {
                     ))}
                   </ScrollView>
                 ) : (
-                  <Text style={styles.sidebarEmpty}>还没有随聊会话</Text>
+                  <Text style={styles.sidebarEmpty}>
+                    {t("还没有随聊会话")}
+                  </Text>
                 )}
               </View>
             ) : null}
@@ -535,7 +543,7 @@ export function ChatScreen({ navigation, route }: Props) {
                 <View style={styles.bannerWrap}>
                   <InlineBanner
                     message={error}
-                    actionLabel="重试"
+                    actionLabel={t("重试")}
                     onAction={() => void loadMessages(true)}
                   />
                 </View>
@@ -562,19 +570,21 @@ export function ChatScreen({ navigation, route }: Props) {
                     <LoadingView
                       label={
                         sessionStatus === "online"
-                          ? "正在加载消息…"
-                          : "正在建立安全会话…"
+                          ? t("正在加载消息…")
+                          : t("正在建立安全会话…")
                       }
                     />
                   ) : (
                     <EmptyState
                       bare
                       icon="chatbubble-ellipses-outline"
-                      title="开始对话"
+                      title={t("开始对话")}
                       message={
                         dudeName
-                          ? `和 ${dudeName} 打个招呼，开始新的对话。`
-                          : "发送一条消息，Tron 会在这里回复。"
+                          ? format("和 {name} 打个招呼，开始新的对话。", {
+                              name: dudeName,
+                            })
+                          : t("发送一条消息，Tron 会在这里回复。")
                       }
                     />
                   )
@@ -607,7 +617,11 @@ export function ChatScreen({ navigation, route }: Props) {
                   <TextInput
                     value={input}
                     onChangeText={setInput}
-                    placeholder={dudeName ? `给 ${dudeName} 发消息…` : "输入消息…"}
+                    placeholder={
+                      dudeName
+                        ? format("给 {name} 发消息…", { name: dudeName })
+                        : t("输入消息…")
+                    }
                     placeholderTextColor={palette.muted}
                     selectionColor={palette.accent}
                     multiline
@@ -617,7 +631,7 @@ export function ChatScreen({ navigation, route }: Props) {
                   />
                   <Pressable
                     accessibilityRole="button"
-                    accessibilityLabel="发送消息"
+                    accessibilityLabel={t("发送消息")}
                     accessibilityState={{ disabled: !canSend, busy: sending }}
                     disabled={!canSend}
                     onPress={() => void handleSend()}
@@ -636,8 +650,8 @@ export function ChatScreen({ navigation, route }: Props) {
                 </View>
                 <Text style={styles.composerHint}>
                   {sending
-                    ? "正在接收回复…"
-                    : "支持多行输入，点击右侧按钮发送"}
+                    ? t("正在接收回复…")
+                    : t("支持多行输入，点击右侧按钮发送")}
                 </Text>
               </View>
             </View>

@@ -7,12 +7,15 @@ iOS、Android 与 iPad。它用于管理局域网或 FRP 穿透后的 Tron 等�
 ## 技术栈
 
 - Expo SDK 58、React Native 0.88、React 19、TypeScript 6。
-- 导航：`@react-navigation/native` + native-stack（不使用 Expo Router）。
+- 导航：`@react-navigation/native` + native-stack（不使用 Expo Router），顶层使用自绘
+  侧边抽屉（`src/navigation/Drawer.tsx`），不额外引入原生手势依赖。
 - 安全存储：`expo-secure-store` 保存每个节点的配对令牌。
-- 本地元数据：AsyncStorage 只保存产品、节点、主题偏好；不保存会话或消息。
+- 本地元数据：AsyncStorage 只保存产品、节点、主题偏好与界面语言；不保存会话或消息。
 - 网络：`expo/fetch`；聊天优先使用流式 SSE，运行时拿不到可读 body 时降级为普通
   `POST /messages` + 轮询。
-- 主题：运行时 `ThemeProvider` 把节点皮肤的 CSS 变量映射为移动端调色板。
+- 主题：移动端内置主题（默认 / 海蓝 / 紫罗兰 / 琥珀）+ 浅色 / 深色 / 跟随系统；
+  不读取、不同步节点皮肤。
+- 语言：简体中文 / English，界面文案立即切换并保存在本机。
 
 ## 命令
 
@@ -28,13 +31,50 @@ npm run start                 # Expo 开发服务器（Expo Go / 开发构建）
 
 ## 使用流程
 
-### 1. 产品列表（新首页）
+### 1. 看板与侧边抽屉
 
-内置产品 `tron`（名称 Tron）不可删除。点击产品进入该产品的节点列表。
+默认首页是移动端看板，展示：
 
-- “添加产品”输入产品编码与显示名；编码只允许小写字母、数字、点和连字符。
-- 自定义产品可删除；删除产品时会同时删除其节点和系统安全存储中的配对令牌。
-- 右上角进入“外观与皮肤”。
+- 产品数、有节点的产品数。
+- 节点数与在线节点数。
+- 会话总数与运行中的会话数。
+- 跨节点的 Dude 卡片；点击后按该节点创建 Dude 会话并进入聊天。
+- 运行中的会话列表，点击直接进入对应节点的聊天。
+
+产品指标卡可点击进入产品列表，用于管理产品下的节点。从屏幕左缘向右滑打开侧边抽屉。
+抽屉头部左侧是 “PersonAI Mobile”，右侧依次是：
+
+- **扫码**图标：直接打开扫码配对流程。
+- **设置**齿轮：进入移动端设置。
+
+抽屉内容只展示**有节点的产品**，结构为：
+
+```text
+产品
+└── 节点
+    └── 会话分组（按产品能力）
+        └── 会话
+```
+
+- Tron Harness（`tron`）按“主题 / 目录 / 随聊”分组：有 `projectCode` 的会话归入主题，
+  仅在 `directoryCode` 的会话归入目录，两者都没有的归入随聊。
+- 其他产品目前只有一层“会话”列表。
+- 没有“当前节点”的选择态；一个产品下的多个节点都会展开在树里。点击某个会话时才绑定
+  对应节点并打开聊天。
+- 会话与 Dude 数据在展开节点 / 加载看板时按需读取，只放在内存；抽屉每次重新打开会
+  刷新已展开节点，切换节点、App 进入后台或离线时清空。
+- 产品/节点的添加、删除仍在产品列表、节点列表和设置页执行。
+
+产品列表从看板的产品指标卡进入。内置产品不可删除，当前包括：
+
+| 编码 | 显示名 |
+| --- | --- |
+| `tron` | Tron Harness |
+| `axiom-agent` | 运维智能体 |
+| `novel-agent` | 小说智能体 |
+| `git-deck` | GitDeck |
+
+点击产品进入该产品的节点列表。自定义产品的添加与删除移到“设置 → 产品定义”。
 
 ### 2. 节点列表
 
@@ -46,22 +86,23 @@ npm run start                 # Expo 开发服务器（Expo Go / 开发构建）
 - 如果 identity 的 `productCode` 与当前产品不一致，会**自动归入 identity 的产品**（必要时
   自动创建该产品），并弹出明确的“产品已自动纠正”提示。
 - 删除节点会删除 SecureStore 中的配对令牌。
-- 顶部返回产品列表。
+- 从屏幕左缘向右滑打开抽屉；节点列表仍支持刷新、扫码/手动添加与长按删除。
+- 空状态的“扫码添加”直接进入扫码页；页头 + 图标打开可切换扫码/手动输入的添加节点页。
 
 ### 3. 节点首页
 
 进入节点后：内存中换取短期 JWT → 加载 Dude、工作区、随聊、主题会话；原有 Home 功能
 （新建随聊、Dude 会话、工作区切换、主题分组、聊天、流式回复与非流式降级）保留。
 
-### 4. 外观
+### 4. 设置
 
-产品列表与节点首页都有“外观与皮肤”入口：
+抽屉中的“设置”页集中管理移动端偏好：
 
-- 列出当前节点 `GET /api/v1/system/skins` 返回的皮肤；节点离线时只显示内置调色板。
-- 支持浅色 / 深色 / 跟随系统；默认深色。
-- 只把“皮肤 id + 明暗模式”保存到 AsyncStorage；不调用激活接口，不修改电脑端主题。
-- 切换立即生效，重启后恢复本地选择（皮肤定义本身不缓存，离线重启时先用内置回退色，
-  连接节点后重新应用）。
+- 外观：浅色 / 深色 / 跟随系统，以及默认 / 海蓝 / 紫罗兰 / 琥珀四种主题色。主题只用
+  内置调色板生成强调色，不读取节点皮肤，也不修改电脑端主题。
+- 界面语言：简体中文 / English；切换立即生效并保存到本机。
+- 产品定义：添加 / 删除产品。上述内置产品不可删除；删除自定义产品会一并删除其节点与
+  配对令牌。产品编码只允许小写字母、数字、点和连字符。
 
 ## 安全模型
 
@@ -73,6 +114,8 @@ npm run start                 # Expo 开发服务器（Expo Go / 开发构建）
 | JWT access token | 之后所有 API 的 `Authorization: Bearer` | **仅内存**，不写任何持久化存储 |
 
 - JWT 过期时间取自 `expiresIn`；剩余不足 60 秒时重新换取。
+- 抽屉会话树会为被展开的节点按需换取短期 JWT，同样只保存在内存（按节点缓存）；App 进入
+  后台时清空。
 - 任何请求返回 HTTP 401 时，自动再用配对令牌换取一次 JWT 并重试；再失败则标记离线并提示
   “配对令牌无效或已过期，请重新配对”。
 - 节点切换、App 进入后台/非活跃状态、离线时都会清空内存中的 JWT 与会话内容；回到前台后
@@ -105,7 +148,7 @@ npm run start                 # Expo 开发服务器（Expo Go / 开发构建）
 
 ### 不持久化会话
 
-- AsyncStorage 只保存：产品列表、节点连接元数据、主题偏好。
+- AsyncStorage 只保存：产品列表、节点连接元数据、主题偏好与界面语言。
 - 配对令牌只在 SecureStore；JWT、会话列表、消息、流式文本只在内存。
 - 退出应用或重启后回到产品列表，不恢复任何会话内容。
 - 旧版单一电脑列表（`@tron/connections/v1`）会在首次启动时迁移为 Tron 产品的节点，
@@ -135,43 +178,34 @@ tron://pair?v=1&url=<urlencoded baseUrl>&token=<token>&name=<urlencoded machineN
   - data：`{ accessToken, expiresIn, identity: { protocolVersion, productCode, productName, nodeId, machineName, version, platform, baseUrl, profile } }`。
 - `GET /api/v1/remote/identity`：JWT 认证，返回 identity 对象。
 - `GET /api/v1/health`：无需认证，用于在线探测。
-- `GET /api/v1/system/skins`：JWT，data 为皮肤数组。
-- `GET /api/v1/system/skins/active`：JWT，data 为 `{ skin }`（只读，用于本地默认选择）。
 - Dude、工作区、主题会话、随聊、消息、发送、流式等原有接口路径与参数不变，认证改为 JWT；
   工作区相关的后续请求都会带 `workspaceCode` 查询参数。第一次拉取工作区列表时尚不知道
   workspaceCode，因此该次引导请求不带该参数。
 
-## 主题映射
+## 主题与语言
 
-皮肤结构：`{ id, name, version, variants: { light, dark }, layout, resources }`。移动端把颜色
-变量映射到调色板，缺失或无法解析时使用内置回退色（内置深色即原有深色主题）：
-
-| 调色板 | 优先 CSS 变量 |
-| --- | --- |
-| background | `--color-background` |
-| surface | `--color-surface` |
-| surfaceAlt | `--color-surface-container-high` → `--color-surface-container` |
-| border | `--color-outline-variant` → `--color-outline` |
-| text | `--color-on-surface` |
-| muted | `--color-on-surface-variant` → `--color-outline` |
-| accent | `--color-primary` → `--color-accent` |
-| onAccent | `--color-on-primary` → `--color-on-accent` |
-| danger | `--color-error` |
-| success | `--color-success` |
-
-- 柔色背景/描边由主色、错误色、成功色按透明度推导（`rgba(...)`）。
-- 支持 `#rgb/#rgba/#rrggbb/#rrggbbaa`、`rgb()/rgba()`、`hsl()/hsla()`；其他格式回退。
-- `layout`、`resources`（背景图、字体、自定义 CSS）不应用到移动端；间距、字号、圆角保持
-  移动端自身规范。
+- 主题是移动端本地概念，不消费节点皮肤接口（`GET /api/v1/system/skins` 与
+  `GET /api/v1/system/skins/active` 不再被调用）。
+- 明暗模式存 `@personai/theme/mode/v1`；主题色存 `@personai/theme/preset/v1`。
+- 四种主题只替换强调色与 `onAccent`，surfaces、文字与语义色保持移动端统一规范；
+  强调色的柔色背景和描边由透明度推导。
+- 语言存 `@personai/language/v1`；首次启动按系统 locale 选择中文或英文。
+- 界面文案通过 `src/i18n` 的中文字面量字典翻译，未翻译的字符串回退为中文。
 
 ## 已知限制
 
 - 未做真机验证。验证范围是 `tsc`、`expo export --platform web`、`expo-doctor`，以及在
-  无头 Chrome 中用本地模拟后端跑通 Web 预览的主要流程（配对、JWT、皮肤、流式、离线、清理）。
+  无头 Chrome 中跑通 Web 预览的主要流程（抽屉、设置、语言/主题切换、配对、JWT、流式、
+  离线、清理）。
 - Web 预览没有 SecureStore 实现，配对令牌会退化为 AsyncStorage；Web 只用于调试/打包验证，
   不是受支持的生产安全目标。
-- 皮肤只应用颜色变量；背景图、字体与自定义 CSS 未实现。移动端未订阅
-  `GET /api/v1/system/skins/events`，皮肤在连接节点或进入外观页时刷新。
+- 抽屉使用核心 `Animated` + `PanResponder`：任意页面从屏幕左缘向右滑打开，点击遮罩或
+  按原生返回键 / Web Esc 关闭。原生侧滑返回已关闭，避免和抽屉手势争抢左缘；返回统一用
+  页头返回按钮。
+- 会话树每个节点只读取第一个 ACTIVE 工作区；多工作区的节点暂不会把所有工作区的会话合并
+  展示。
+- 只有 Tron Harness 使用“主题 / 目录 / 随聊”分组，其他产品目前是单层会话列表。
 - 节点的“不安全调试”标记保存后不能单独撤销；需要删除节点后重新配对。
 - 消息按纯文本展示，不渲染 Markdown、不处理附件（与原行为一致）。
 - 离开节点回到节点列表时保留当前内存会话；选择另一个节点才会切换并清空。
+- 抽屉会话树只读取每个节点的第一个 ACTIVE 工作区，多工作区节点的会话暂不会全部展示。

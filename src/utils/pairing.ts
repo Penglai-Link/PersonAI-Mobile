@@ -1,4 +1,5 @@
 import { isSecureBaseUrl, normalizeBaseUrl } from "../api/client";
+import { formatMessage, translate } from "../i18n";
 import { TRON_PRODUCT_CODE, TRON_PRODUCT_NAME } from "../api/tron";
 
 export interface PairingInfo {
@@ -27,7 +28,7 @@ function decodeQueryPart(value: string): string {
   try {
     return decodeURIComponent(value.replace(/\+/g, " "));
   } catch {
-    throw new Error("二维码中的参数编码无效");
+    throw new Error(translate("二维码中的参数编码无效"));
   }
 }
 
@@ -65,7 +66,7 @@ function parseSecureFlag(raw: string | undefined, fallback: boolean): boolean {
 export function parsePairingUri(raw: string): PairingInfo {
   const value = raw.trim();
   if (!/^tron:\/\/pair(?:[/?]|$)/i.test(value)) {
-    throw new Error("这不是 Tron 的配对二维码");
+    throw new Error(translate("这不是 Tron 的配对二维码"));
   }
 
   const queryStart = value.indexOf("?");
@@ -74,17 +75,21 @@ export function parsePairingUri(raw: string): PairingInfo {
 
   const version = params.v ? Number(params.v) : 1;
   if (version !== 1 && version !== 2) {
-    throw new Error(`不支持的配对协议版本：${params.v}`);
+    throw new Error(
+      formatMessage("不支持的配对协议版本：{version}", {
+        version: params.v ?? "",
+      }),
+    );
   }
-  if (!params.url) throw new Error("二维码缺少节点地址");
-  if (!params.token) throw new Error("二维码缺少配对令牌");
+  if (!params.url) throw new Error(translate("二维码缺少节点地址"));
+  if (!params.token) throw new Error(translate("二维码缺少配对令牌"));
 
   const baseUrl = normalizeBaseUrl(params.url);
   const productCode = (params.product || TRON_PRODUCT_CODE)
     .trim()
     .toLowerCase();
   if (!isValidProductCode(productCode)) {
-    throw new Error("二维码中的产品编码无效");
+    throw new Error(translate("二维码中的产品编码无效"));
   }
   const productName =
     params.productName?.trim() ||

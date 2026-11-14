@@ -8,13 +8,13 @@ import {
   type ViewStyle,
 } from "react-native";
 
+import { useI18n } from "../i18n";
 import { spacing, typography, useTheme, useThemedStyles, type Palette } from "../theme";
 import { Ionicons } from "./icons";
 
 interface AppHeaderProps {
   title: string;
   subtitle?: string;
-  eyebrow?: string;
   onBack?: () => void;
   right?: ReactNode;
   large?: boolean;
@@ -24,7 +24,6 @@ interface AppHeaderProps {
 export function AppHeader({
   title,
   subtitle,
-  eyebrow,
   onBack,
   right,
   large = false,
@@ -32,12 +31,13 @@ export function AppHeader({
 }: AppHeaderProps) {
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const { t } = useI18n();
   return (
     <View style={[styles.root, style]}>
       {onBack ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="返回"
+          accessibilityLabel={t("返回")}
           onPress={onBack}
           hitSlop={10}
           style={({ pressed }) => [styles.back, pressed && styles.pressed]}
@@ -47,7 +47,6 @@ export function AppHeader({
       ) : null}
 
       <View style={styles.titles}>
-        {eyebrow ? <Text style={styles.eyebrow}>{eyebrow}</Text> : null}
         <Text
           style={[styles.title, large && styles.largeTitle]}
           numberOfLines={1}
@@ -92,14 +91,6 @@ const createStyles = (c: Palette) =>
     titles: {
       flex: 1,
       gap: 2,
-    },
-    eyebrow: {
-      color: c.accent,
-      fontSize: 10,
-      fontWeight: "700",
-      letterSpacing: 1.6,
-      textTransform: "uppercase",
-      marginBottom: 2,
     },
     title: {
       color: c.text,

@@ -13,6 +13,7 @@ import {
 import { Platform } from "react-native";
 
 import { checkHealth, TRON_PRODUCT_CODE, TRON_PRODUCT_NAME } from "../api/tron";
+import { translate } from "../i18n";
 import { isSecureBaseUrl, normalizeBaseUrl } from "../api/client";
 
 const PRODUCTS_KEY = "@personai/products/v1";
@@ -152,13 +153,23 @@ async function deleteStoredToken(nodeId: string): Promise<void> {
   ]);
 }
 
-function builtInTronProduct(): Product {
-  return {
-    code: TRON_PRODUCT_CODE,
-    name: TRON_PRODUCT_NAME,
+const BUILT_IN_PRODUCT_DEFINITIONS: ReadonlyArray<{
+  code: string;
+  name: string;
+}> = [
+  { code: TRON_PRODUCT_CODE, name: TRON_PRODUCT_NAME },
+  { code: "axiom-agent", name: "运维智能体" },
+  { code: "novel-agent", name: "小说智能体" },
+  { code: "git-deck", name: "GitDeck" },
+];
+
+function builtInProducts(): Product[] {
+  const createdAt = new Date(0).toISOString();
+  return BUILT_IN_PRODUCT_DEFINITIONS.map((definition) => ({
+    ...definition,
     builtIn: true,
-    createdAt: new Date(0).toISOString(),
-  };
+    createdAt,
+  }));
 }
 
 function isProduct(value: unknown): value is Product {
@@ -173,25 +184,34 @@ function isProduct(value: unknown): value is Product {
 }
 
 function parseStoredProducts(raw: string | null): Product[] {
-  if (!raw) return [builtInTronProduct()];
+  if (!raw) return builtInProducts();
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
+    if (!Array.isArray(parsed)) return builtInProducts();
     const stored = parsed.filter(isProduct).map((product) => ({
       ...product,
       code: product.code.trim().toLowerCase(),
     }));
-    // The built-in Tron product always exists and is never deletable.
-    if (!stored.some((product) => product.code === TRON_PRODUCT_CODE)) {
-      return [builtInTronProduct(), ...stored];
-    }
-    return stored.map((product) =>
-      product.code === TRON_PRODUCT_CODE
-        ? { ...product, builtIn: true, name: TRON_PRODUCT_NAME }
-        : product,
+    // Built-in products always exist with their canonical names and are never
+    // deletable, even if the stored copy predates this definition.
+    const builtIns = BUILT_IN_PRODUCT_DEFINITIONS.map((definition) => {
+      const existing = stored.find((product) => product.code === definition.code);
+      return {
+        code: definition.code,
+        name: definition.name,
+        builtIn: true,
+        createdAt: existing?.createdAt ?? new Date(0).toISOString(),
+      };
+    });
+    const custom = stored.filter(
+      (product) =>
+        !BUILT_IN_PRODUCT_DEFINITIONS.some(
+          (definition) => definition.code === product.code,
+        ),
     );
+    return [...builtIns, ...custom];
   } catch {
-    return [builtInTronProduct()];
+    return builtInProducts();
   }
 }
 
@@ -285,7 +305,7 @@ function normalizeProductCode(value: string): string {
 }
 
 export function ConnectionsProvider({ children }: { children: ReactNode }) {
-  const [products, setProducts] = useState<Product[]>([builtInTronProduct()]);
+  const [products, setProducts] = useState<Product[]>(() => builtInProducts());
   const [nodes, setNodes] = useState<SavedNode[]>([]);
   const [currentProductCode, setCurrentProductCode] = useState<string | null>(
     null,
@@ -294,7 +314,7 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [probing, setProbing] = useState(false);
 
-  const productsRef = useRef<Product[]>([builtInTronProduct()]);
+  const productsRef = useRef<Product[]>(builtInProducts());
   const nodesRef = useRef<SavedNode[]>([]);
   const currentNodeIdRef = useRef<string | null>(null);
   const hydratedRef = useRef(false);
@@ -384,7 +404,7 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
               lastConnectedAt: computer.lastConnectedAt,
               createdAt: computer.createdAt,
             }));
-            productsRef.current = [builtInTronProduct()];
+            productsRef.current = builtInProducts();
             nodesRef.current = migrated;
             setProducts(productsRef.current);
             setNodes(migrated);
@@ -458,14 +478,16 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
     (input: { code: string; name: string }): Product => {
       const code = normalizeProductCode(input.code);
       const name = input.name.trim();
-      if (!code) throw new Error("请输入产品编码");
+      if (!code) throw new Error(translate("请输入产品编码"));
       if (!PRODUCT_CODE_PATTERN.test(code)) {
-        throw new Error("产品编码只能包含小写字母、数字、点和连字符");
+        throw new Error(
+        translate("产品编码只能包含小写字母、数字、点和连字符"),
+      );
       }
-      if (!name) throw new Error("请输入产品显示名");
-      if (name.length > 60) throw new Error("产品显示名不能超过 60 个字符");
+      if (!name) throw new Error(translate("请输入产品显示名"));
+      if (name.length > 60) throw new Error(translate("产品显示名不能超过 60 个字符"));
       if (productsRef.current.some((product) => product.code === code)) {
-        throw new Error("该产品编码已存在");
+        throw new Error(translate("该产品编码已存在"));
       }
       const product: Product = {
         code,
@@ -483,8 +505,11 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
 
   const removeProduct = useCallback(async (productCode: string) => {
     const normalized = normalizeProductCode(productCode);
-    if (normalized === TRON_PRODUCT_CODE) {
-      throw new Error("内置 Tron 产品不能删除");
+    const targetProduct = productsRef.current.find(
+      (product) => product.code === normalized,
+    );
+    if (targetProduct?.builtIn) {
+      throw new Error(translate("内置产品不能删除"));
     }
     const affected = nodesRef.current.filter(
       (node) => node.productCode === normalized,
@@ -527,13 +552,15 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
       if (
         !productsRef.current.some((product) => product.code === productCode)
       ) {
-        throw new Error("目标产品不存在");
+        throw new Error(translate("目标产品不存在"));
       }
       const baseUrl = normalizeBaseUrl(input.baseUrl);
       const pairingToken = input.pairingToken.trim();
-      if (!pairingToken) throw new Error("配对令牌不能为空");
+      if (!pairingToken) throw new Error(translate("配对令牌不能为空"));
       if (!isSecureBaseUrl(baseUrl) && !input.allowInsecure) {
-        throw new Error("非 HTTPS 地址需要显式开启不安全调试");
+        throw new Error(
+        translate("非 HTTPS 地址需要显式开启不安全调试"),
+      );
       }
 
       const existing = nodesRef.current.find(
@@ -549,7 +576,7 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
         id,
         productCode,
         nodeId: input.nodeId ?? existing?.nodeId ?? null,
-        name: input.name.trim() || existing?.name || "Tron 电脑",
+        name: input.name.trim() || existing?.name || translate("Tron 电脑"),
         baseUrl,
         allowInsecure: input.allowInsecure,
         platform: input.platform ?? existing?.platform ?? null,

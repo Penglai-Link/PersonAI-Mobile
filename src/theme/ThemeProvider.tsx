@@ -17,25 +17,31 @@ import {
   type ViewStyle,
 } from "react-native";
 
-import { isUnauthorizedError } from "../api/client";
-import { getActiveSkin, listSkins, type Skin } from "../api/tron";
-import { useNodeSession } from "../store/nodeSession";
-import { describeError } from "../utils/format";
 import {
   createPalette,
-  fallbackPalettes,
-  skinColors,
+  mobileThemes,
+  type MobileThemeId,
+  type MobileThemePreset,
   type Palette,
   type ResolvedMode,
   type ThemeMode,
 } from "./palette";
 
-export type { Palette, ResolvedMode, Skin, ThemeMode };
+export type {
+  MobileThemeId,
+  MobileThemePreset,
+  Palette,
+  ResolvedMode,
+  ThemeMode,
+};
 
 const THEME_MODE_KEY = "@personai/theme/mode/v1";
-const THEME_SKIN_KEY = "@personai/theme/skin/v1";
+const THEME_PRESET_KEY = "@personai/theme/preset/v1";
 const LEGACY_THEME_MODE_KEY = "@tron/theme/mode/v1";
+// Node-synced skins are gone. Clean up both historical skin keys so a stale
+// value can never be interpreted as a mobile theme id.
 const LEGACY_THEME_SKIN_KEY = "@tron/theme/skin/v1";
+const OLD_THEME_SKIN_KEY = "@personai/theme/skin/v1";
 
 interface ThemeContextValue {
   ready: boolean;
@@ -45,105 +51,66 @@ interface ThemeContextValue {
   /** Mode actually applied after resolving `system`. */
   resolvedMode: ResolvedMode;
   palette: Palette;
-  /** Skins reported by the currently selected node (empty when offline). */
-  skins: Skin[];
-  skinId: string | null;
-  /** Skin applied for rendering; null means the built-in palette. */
-  activeSkin: Skin | null;
-  setSkinId: (skinId: string | null) => void;
-  refreshSkins: () => Promise<void>;
-  loadingSkins: boolean;
-  skinsError: string | null;
+  /** Built-in mobile themes; independent from any node. */
+  themes: readonly MobileThemePreset[];
+  themeId: MobileThemeId;
+  activeTheme: MobileThemePreset;
+  setThemeId: (themeId: MobileThemeId) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 // Preserve the original dark look for first-run users; "system" is available
-// from the appearance screen.
+// from the settings screen.
 const DEFAULT_MODE: ThemeMode = "dark";
+const DEFAULT_THEME_ID: MobileThemeId = "default";
 
 function isThemeMode(value: unknown): value is ThemeMode {
   return value === "light" || value === "dark" || value === "system";
 }
 
-function isSkinArray(value: unknown): value is Skin[] {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (item) =>
-        typeof item === "object" &&
-        item !== null &&
-        typeof (item as Skin).id === "string" &&
-        typeof (item as Skin).name === "string",
-    )
-  );
+function isThemeId(value: unknown): value is MobileThemeId {
+  return mobileThemes.some((theme) => theme.id === value);
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const systemScheme = useColorScheme();
-  const {
-    status: sessionStatus,
-    nodeKey,
-    request: sessionRequest,
-  } = useNodeSession();
 
   const [ready, setReady] = useState(false);
   const [mode, setModeState] = useState<ThemeMode>(DEFAULT_MODE);
-  const [preferredSkinId, setPreferredSkinIdState] = useState<string | null>(null);
-  const [skins, setSkins] = useState<Skin[]>([]);
-  const [serverActiveSkin, setServerActiveSkin] = useState<Skin | null>(null);
-  const [loadingSkins, setLoadingSkins] = useState(false);
-  const [skinsError, setSkinsError] = useState<string | null>(null);
+  const [themeId, setThemeIdState] = useState<MobileThemeId>(DEFAULT_THEME_ID);
 
-  const modeRef = useRef<ThemeMode>(DEFAULT_MODE);
-  const skinRef = useRef<string | null>(null);
-  const nodeKeyRef = useRef<string | null>(null);
-  const statusRef = useRef(sessionStatus);
-  const requestRef = useRef(sessionRequest);
   const hydratedRef = useRef(false);
-
-  useEffect(() => {
-    modeRef.current = mode;
-  }, [mode]);
-
-  useEffect(() => {
-    skinRef.current = preferredSkinId;
-  }, [preferredSkinId]);
-
-  useEffect(() => {
-    nodeKeyRef.current = nodeKey;
-  }, [nodeKey]);
-
-  useEffect(() => {
-    statusRef.current = sessionStatus;
-  }, [sessionStatus]);
-
-  useEffect(() => {
-    requestRef.current = sessionRequest;
-  }, [sessionRequest]);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        let [storedMode, storedSkin] = await Promise.all([
-          AsyncStorage.getItem(THEME_MODE_KEY),
-          AsyncStorage.getItem(THEME_SKIN_KEY),
-        ]);
-        if (!storedMode) {
-          storedMode = await AsyncStorage.getItem(LEGACY_THEME_MODE_KEY);
-        }
-        if (!storedSkin) {
-          storedSkin = await AsyncStorage.getItem(LEGACY_THEME_SKIN_KEY);
-        }
+        const [storedMode, storedPreset, legacySkin, oldSkin] =
+          await Promise.all([
+            AsyncStorage.getItem(THEME_MODE_KEY),
+            AsyncStorage.getItem(THEME_PRESET_KEY),
+            AsyncStorage.getItem(LEGACY_THEME_SKIN_KEY),
+            AsyncStorage.getItem(OLD_THEME_SKIN_KEY),
+          ]);
+        const legacyMode = storedMode
+          ? null
+          : await AsyncStorage.getItem(LEGACY_THEME_MODE_KEY);
         if (cancelled) return;
         if (isThemeMode(storedMode)) {
-          modeRef.current = storedMode;
           setModeState(storedMode);
+        } else if (isThemeMode(legacyMode)) {
+          setModeState(legacyMode);
         }
-        if (storedSkin && storedSkin.trim()) {
-          skinRef.current = storedSkin.trim();
-          setPreferredSkinIdState(storedSkin.trim());
+        if (isThemeId(storedPreset)) {
+          setThemeIdState(storedPreset);
+        }
+        if (legacySkin || oldSkin) {
+          // The skin id belonged to the node, not to this device. Drop it.
+          await Promise.all([
+            AsyncStorage.removeItem(LEGACY_THEME_SKIN_KEY),
+            AsyncStorage.removeItem(OLD_THEME_SKIN_KEY),
+          ]).catch(() => undefined);
         }
       } catch {
         // Fall back to defaults when storage is unavailable.
@@ -160,100 +127,38 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setMode = useCallback((nextMode: ThemeMode) => {
-    modeRef.current = nextMode;
     setModeState(nextMode);
     if (hydratedRef.current) {
       void AsyncStorage.setItem(THEME_MODE_KEY, nextMode).catch(() => undefined);
     }
   }, []);
 
-  const setSkinId = useCallback((nextSkinId: string | null) => {
-    skinRef.current = nextSkinId;
-    setPreferredSkinIdState(nextSkinId);
+  const setThemeId = useCallback((nextThemeId: MobileThemeId) => {
+    setThemeIdState(nextThemeId);
     if (hydratedRef.current) {
-      void (nextSkinId
-        ? AsyncStorage.setItem(THEME_SKIN_KEY, nextSkinId)
-        : AsyncStorage.removeItem(THEME_SKIN_KEY)
-      ).catch(() => undefined);
+      void AsyncStorage.setItem(THEME_PRESET_KEY, nextThemeId).catch(
+        () => undefined,
+      );
     }
   }, []);
-
-  const refreshSkins = useCallback(async () => {
-    if (!nodeKeyRef.current || statusRef.current !== "online") {
-      return;
-    }
-    const requestNodeKey = nodeKeyRef.current;
-    setLoadingSkins(true);
-    setSkinsError(null);
-    try {
-      const result = await requestRef.current(async ({ baseUrl, token }) => {
-        const [list, active] = await Promise.all([
-          listSkins({ baseUrl, token, timeoutMs: 12_000 }),
-          // A missing/unsupported active endpoint should not fail the whole skin
-          // fetch, but an expired JWT must still reach the session's 401 retry.
-          getActiveSkin({ baseUrl, token, timeoutMs: 12_000 }).catch(
-            (activeError: unknown) => {
-              if (isUnauthorizedError(activeError)) throw activeError;
-              return null;
-            },
-          ),
-        ]);
-        return { list, active: active?.skin ?? null };
-      });
-      // A node switch clears the skin list in another effect; ignore stale replies.
-      if (nodeKeyRef.current !== requestNodeKey) return;
-      if (!isSkinArray(result.list)) {
-        setSkins([]);
-      } else {
-        setSkins(result.list);
-      }
-      setServerActiveSkin(result.active);
-    } catch (error) {
-      if (nodeKeyRef.current === requestNodeKey) {
-        // Keep the last known skins; only surface the message.
-        setSkinsError(describeError(error));
-      }
-    } finally {
-      setLoadingSkins(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!ready) return;
-    if (!nodeKey) {
-      setSkins([]);
-      setServerActiveSkin(null);
-      setSkinsError(null);
-      return;
-    }
-    if (sessionStatus === "online") {
-      void refreshSkins();
-    }
-  }, [nodeKey, ready, refreshSkins, sessionStatus]);
 
   const resolvedMode: ResolvedMode =
     mode === "system" ? (systemScheme === "light" ? "light" : "dark") : mode;
 
-  const activeSkin = useMemo<Skin | null>(() => {
-    if (!skins.length) return null;
-    if (preferredSkinId) {
-      const preferred = skins.find((skin) => skin.id === preferredSkinId);
-      if (preferred) return preferred;
-    }
-    if (serverActiveSkin) {
-      const active = skins.find((skin) => skin.id === serverActiveSkin.id);
-      if (active) return active;
-      return serverActiveSkin;
-    }
-    return skins[0] ?? null;
-  }, [preferredSkinId, serverActiveSkin, skins]);
+  const activeTheme = useMemo<MobileThemePreset>(
+    () =>
+      mobileThemes.find((theme) => theme.id === themeId) ??
+      mobileThemes.find((theme) => theme.id === "default")!,
+    [themeId],
+  );
 
   const palette = useMemo(
     () =>
-      activeSkin
-        ? createPalette(resolvedMode, skinColors(activeSkin, resolvedMode))
-        : fallbackPalettes[resolvedMode],
-    [activeSkin, resolvedMode],
+      createPalette(resolvedMode, {
+        "--color-primary": activeTheme.accent[resolvedMode],
+        "--color-on-primary": activeTheme.onAccent[resolvedMode],
+      }),
+    [activeTheme, resolvedMode],
   );
 
   const value = useMemo<ThemeContextValue>(
@@ -263,27 +168,20 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       setMode,
       resolvedMode,
       palette,
-      skins,
-      skinId: preferredSkinId,
-      activeSkin,
-      setSkinId,
-      refreshSkins,
-      loadingSkins,
-      skinsError,
+      themes: mobileThemes,
+      themeId,
+      activeTheme,
+      setThemeId,
     }),
     [
-      activeSkin,
-      loadingSkins,
+      activeTheme,
       mode,
       palette,
-      preferredSkinId,
       ready,
-      refreshSkins,
       resolvedMode,
       setMode,
-      setSkinId,
-      skins,
-      skinsError,
+      setThemeId,
+      themeId,
     ],
   );
 

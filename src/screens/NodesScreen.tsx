@@ -20,6 +20,7 @@ import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { LoadingView } from "../components/LoadingView";
 import { Screen } from "../components/Screen";
+import { useI18n } from "../i18n";
 import { StatusDot } from "../components/StatusDot";
 import { Ionicons } from "../components/icons";
 import type { RootStackParamList } from "../navigation/types";
@@ -33,6 +34,7 @@ import {
   useThemedStyles,
   type Palette,
 } from "../theme";
+import { confirmDestructive } from "../utils/confirm";
 import { describeError, formatDateTime } from "../utils/format";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Nodes">;
@@ -40,6 +42,7 @@ type Props = NativeStackScreenProps<RootStackParamList, "Nodes">;
 export function NodesScreen({ navigation, route }: Props) {
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const { t, format } = useI18n();
   const productCode = route.params.productCode;
   const {
     products,
@@ -63,6 +66,10 @@ export function NodesScreen({ navigation, route }: Props) {
     [nodes, productCode],
   );
 
+  // Route params are the single source of truth for the active product. The
+  // drawer and product list only navigate here; selecting in both places used
+  // to race and made the "switch product" highlight bounce during the close
+  // animation.
   useEffect(() => {
     if (currentProductCode !== productCode) {
       selectProduct(productCode);
@@ -83,8 +90,8 @@ export function NodesScreen({ navigation, route }: Props) {
         const pairingToken = await getPairingToken(node.id);
         if (!pairingToken) {
           Alert.alert(
-            "配对令牌丢失",
-            "这台节点的配对令牌已不存在，请删除后重新扫码或手动配对。",
+            t("配对令牌丢失"),
+            t("这台节点的配对令牌已不存在，请删除后重新扫码或手动配对。"),
           );
           return;
         }
@@ -99,36 +106,21 @@ export function NodesScreen({ navigation, route }: Props) {
 
   const remove = useCallback(
     (node: SavedNode) => {
-      const run = () => {
-        void removeNode(node.id).catch((error) => {
-          Alert.alert("删除失败", describeError(error));
-        });
-      };
-      if (Platform.OS === "web") {
-        if (
-          typeof window !== "undefined" &&
-          window.confirm(`确定删除「${node.name}」？系统安全存储中的配对令牌也会被删除。`)
-        ) {
-          run();
-        }
-        return;
-      }
-      Alert.alert(
-        "删除节点",
-        `确定删除「${node.name}」？系统安全存储中的配对令牌也会被删除。`,
-        [
-          { text: "取消", style: "cancel" },
-          { text: "删除", style: "destructive", onPress: run },
-        ],
-      );
+      confirmDestructive({
+        title: t("删除节点"),
+        message: format(
+          "确定删除「{name}」？系统安全存储中的配对令牌也会被删除。",
+          { name: node.name },
+        ),
+        onConfirm: () => {
+          void removeNode(node.id).catch((error) => {
+            Alert.alert(t("删除失败"), describeError(error));
+          });
+        },
+      });
     },
-    [removeNode],
+    [format, removeNode, t],
   );
-
-  const goBack = useCallback(() => {
-    selectProduct(productCode);
-    navigation.goBack();
-  }, [navigation, productCode, selectProduct]);
 
   const showBlocked = useCallback(
     (node: SavedNode) => !isSecureBaseUrl(node.baseUrl) && !node.allowInsecure,
@@ -138,24 +130,25 @@ export function NodesScreen({ navigation, route }: Props) {
   return (
     <Screen>
       <AppHeader
-        eyebrow={product?.code ?? productCode}
-        title={product?.name ?? "产品"}
-        subtitle="选择节点（电脑）"
-        onBack={goBack}
+        title={product?.name ?? t("产品", "singular")}
         right={
-          <Button
-            label="添加节点"
-            icon="add"
-            small
-            onPress={() =>
-              navigation.navigate("AddNode", { productCode })
-            }
-          />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t("添加节点")}
+            onPress={() => navigation.navigate("AddNode", { productCode })}
+            hitSlop={8}
+            style={({ pressed }) => [
+              styles.addButton,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Ionicons name="add" size={22} color={palette.accent} />
+          </Pressable>
         }
       />
 
       {!ready ? (
-        <LoadingView label="正在读取已保存的节点…" />
+        <LoadingView label={t("正在读取已保存的节点…")} />
       ) : productNodes.length === 0 ? (
         <ScrollView
           contentContainerStyle={styles.emptyScroll}
@@ -171,12 +164,14 @@ export function NodesScreen({ navigation, route }: Props) {
         >
           <EmptyState
             icon="laptop-outline"
-            title="还没有节点"
-            message="在电脑端 Tron 的“设置 → 通用 → 手机访问”中打开配对二维码，或手动输入节点地址与配对令牌。"
+            title={t("还没有节点")}
+            message={t(
+              "在电脑端打开配对二维码，或手动输入节点地址与配对令牌。",
+            )}
             action={
               <View style={styles.emptyActions}>
                 <Button
-                  label="扫码添加"
+                  label={t("扫码添加")}
                   icon="qr-code-outline"
                   fullWidth
                   onPress={() =>
@@ -184,7 +179,7 @@ export function NodesScreen({ navigation, route }: Props) {
                   }
                 />
                 <Button
-                  label="手动添加"
+                  label={t("手动添加")}
                   icon="create-outline"
                   variant="secondary"
                   fullWidth
@@ -197,11 +192,7 @@ export function NodesScreen({ navigation, route }: Props) {
                 />
               </View>
             }
-          />
-          <Text style={styles.securityNote}>
-            配对令牌保存在系统安全存储。JWT 和会话内容只保存在内存，离开节点即清空。
-          </Text>
-        </ScrollView>
+          />        </ScrollView>
       ) : (
         <ScrollView
           contentContainerStyle={styles.listContent}
@@ -234,11 +225,7 @@ export function NodesScreen({ navigation, route }: Props) {
                 />
               );
             })}
-          </View>
-          <Text style={styles.securityNote}>
-            点击卡片进入节点；点击右上角菜单可删除节点并清除其配对令牌。
-          </Text>
-        </ScrollView>
+          </View>        </ScrollView>
       )}
 
       {openingId ? (
@@ -269,20 +256,21 @@ function NodeCard({
 }) {
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const { t, format } = useI18n();
   const statusLabel = blocked
-    ? "已阻止"
+    ? t("已阻止")
     : online === true
-      ? "在线"
+      ? t("在线")
       : online === false
-        ? "离线"
-        : "检测中";
+        ? t("离线")
+        : t("检测中");
 
   return (
     <View style={[styles.card, current && styles.cardCurrent]}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`打开节点 ${node.name}`}
-        accessibilityHint="进入该节点的会话首页，长按可删除"
+        accessibilityLabel={format("打开节点：{name}", { name: node.name })}
+        accessibilityHint={t("进入该节点的会话首页，长按可删除")}
         onPress={onOpen}
         onLongPress={onRemove}
         delayLongPress={450}
@@ -301,7 +289,7 @@ function NodeCard({
               <Text style={styles.name} numberOfLines={1}>
                 {node.name}
               </Text>
-              {current ? <Badge label="当前" tone="accent" /> : null}
+              {current ? <Badge label={t("当前")} tone="accent" /> : null}
               {node.nodeId ? (
                 <Badge label={node.nodeId} tone="muted" />
               ) : null}
@@ -322,14 +310,20 @@ function NodeCard({
 
         {!isSecureBaseUrl(node.baseUrl) ? (
           <Badge
-            label={node.allowInsecure ? "不安全调试（非 HTTPS）" : "非 HTTPS，已阻止"}
+            label={
+              node.allowInsecure
+                ? t("不安全调试（非 HTTPS）")
+                : t("非 HTTPS，已阻止")
+            }
             tone="danger"
           />
         ) : null}
 
         <View style={styles.cardFooter}>
           <Text style={styles.footerText}>
-            最近连接 {formatDateTime(node.lastConnectedAt)}
+            {format("最近连接 {time}", {
+              time: formatDateTime(node.lastConnectedAt),
+            })}
           </Text>
           {node.version ? (
             <Text style={styles.footerText}>v{node.version}</Text>
@@ -339,7 +333,7 @@ function NodeCard({
 
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`删除节点 ${node.name}`}
+        accessibilityLabel={format("删除节点：{name}", { name: node.name })}
         onPress={onRemove}
         hitSlop={8}
         style={({ pressed }) => [styles.moreButton, pressed && styles.pressed]}
@@ -387,6 +381,16 @@ const createStyles = (c: Palette) =>
     },
     pressed: {
       opacity: 0.75,
+    },
+    addButton: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: c.surface,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.border,
     },
     cardTop: {
       flexDirection: "row",
@@ -462,14 +466,6 @@ const createStyles = (c: Palette) =>
       borderRadius: 16,
       alignItems: "center",
       justifyContent: "center",
-    },
-    securityNote: {
-      color: c.muted,
-      ...typography.caption,
-      fontSize: 11,
-      textAlign: "center",
-      lineHeight: 17,
-      paddingHorizontal: spacing.xl,
     },
     overlay: {
       position: "absolute",

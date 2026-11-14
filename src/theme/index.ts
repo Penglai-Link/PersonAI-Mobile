@@ -1,13 +1,21 @@
 /**
  * PersonAI Mobile's runtime visual language.
  *
- * Colors come from the active node skin (mapped CSS variables) or from the
- * built-in fallback palettes; spacing/typography stay constant so layouts never
- * jump when a skin changes.
+ * Themes are local to the app: mode and accent preset come from device
+ * preferences, never from a node. Spacing and typography stay constant.
  */
 
-export { ThemeProvider, useTheme, useThemedStyles, type Palette, type ResolvedMode, type Skin, type ThemeMode } from "./ThemeProvider";
-export { fallbackPalettes, parseCssColor } from "./palette";
+export {
+  ThemeProvider,
+  useTheme,
+  useThemedStyles,
+  type MobileThemeId,
+  type MobileThemePreset,
+  type Palette,
+  type ResolvedMode,
+  type ThemeMode,
+} from "./ThemeProvider";
+export { mobileThemes, parseCssColor } from "./palette";
 
 export const spacing = {
   xs: 4,

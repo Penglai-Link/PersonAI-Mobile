@@ -30,6 +30,7 @@ import { AppHeader } from "../components/AppHeader";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
 import { Card } from "../components/Card";
+import { DudeCard } from "../components/DudeCard";
 import { EmptyState } from "../components/EmptyState";
 import { InlineBanner } from "../components/InlineBanner";
 import { LoadingView } from "../components/LoadingView";
@@ -38,6 +39,7 @@ import { SectionHeader } from "../components/SectionHeader";
 import { SegmentedControl } from "../components/SegmentedControl";
 import { SessionRow } from "../components/SessionRow";
 import { Ionicons } from "../components/icons";
+import { useI18n } from "../i18n";
 import type { RootStackParamList } from "../navigation/types";
 import { useConnections } from "../store/connections";
 import { useNodeSession } from "../store/nodeSession";
@@ -71,6 +73,7 @@ function sortByUpdatedDesc(left: ChatSession, right: ChatSession): number {
 export function HomeScreen({ navigation }: Props) {
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const { t, format } = useI18n();
   const { currentNode: computer } = useConnections();
   const {
     status: sessionStatus,
@@ -337,7 +340,7 @@ export function HomeScreen({ navigation }: Props) {
       const workspaceCode =
         session.workspaceCode ?? selectedWorkspaceRef.current ?? "";
       if (!workspaceCode) {
-        setError("该会话缺少工作区信息，请刷新后重试");
+        setError(t("该会话缺少工作区信息，请刷新后重试"));
         return;
       }
       const isDudeSession =
@@ -438,14 +441,17 @@ export function HomeScreen({ navigation }: Props) {
   if (!computer) {
     return (
       <Screen>
-        <AppHeader title="PersonAI" subtitle="尚未选择节点" />
+        <AppHeader
+          title="PersonAI"
+          subtitle={t("尚未选择节点")}
+        />
         <EmptyState
           icon="laptop-outline"
-          title="还没有选中节点"
-          message="回到节点列表，选择一台已保存的电脑开始使用。"
+          title={t("还没有选中节点")}
+          message={t("回到节点列表，选择一台已保存的电脑开始使用。")}
           action={
             <Button
-              label="返回产品列表"
+              label={t("返回产品列表")}
               icon="swap-horizontal"
               onPress={() => navigation.navigate("Products")}
             />
@@ -465,10 +471,10 @@ export function HomeScreen({ navigation }: Props) {
     workspaces.length === 0;
 
   const statusLabel = offline
-    ? "离线"
+    ? t("离线")
     : sessionStatus === "online"
-      ? "在线"
-      : "连接中";
+      ? t("在线")
+      : t("连接中");
 
   const renderDudeSection = () => (
     <View style={styles.section}>
@@ -477,8 +483,8 @@ export function HomeScreen({ navigation }: Props) {
         <EmptyState
           bare
           icon="sparkles-outline"
-          title="暂无 Dude"
-          message="在电脑端创建 Dude 后，这里会显示可用的助手。"
+          title={t("暂无 Dude")}
+          message={t("在电脑端创建 Dude 后，这里会显示可用的助手。")}
         />
       ) : (
         <ScrollView
@@ -501,9 +507,11 @@ export function HomeScreen({ navigation }: Props) {
 
   const renderWorkspaceSection = () => (
     <View style={styles.section}>
-      <SectionHeader title="工作区" count={activeWorkspaces.length} />
+      <SectionHeader title={t("工作区")} count={activeWorkspaces.length} />
       {activeWorkspaces.length === 0 ? (
-        <Text style={styles.mutedText}>这台电脑还没有可用的工作区。</Text>
+        <Text style={styles.mutedText}>
+          {t("这台电脑还没有可用的工作区。")}
+        </Text>
       ) : (
         <ScrollView
           horizontal
@@ -516,7 +524,9 @@ export function HomeScreen({ navigation }: Props) {
               <Pressable
                 key={workspace.workspaceCode}
                 accessibilityRole="button"
-                accessibilityLabel={`切换到工作区 ${workspace.name}`}
+                accessibilityLabel={format("切换到工作区 {name}", {
+                  name: workspace.name,
+                })}
                 accessibilityState={{ selected }}
                 onPress={() => selectWorkspace(workspace.workspaceCode)}
                 style={({ pressed }) => [
@@ -548,7 +558,7 @@ export function HomeScreen({ navigation }: Props) {
   const renderRecentSessions = () => (
     <View style={styles.section}>
       <SectionHeader
-        title="随聊"
+        title={t("随聊")}
         count={recentSessions.length}
         right={
           contentLoading ? <ActivityIndicator size="small" color={palette.accent} /> : null
@@ -572,12 +582,12 @@ export function HomeScreen({ navigation }: Props) {
           <EmptyState
             bare
             icon="chatbubbles-outline"
-            title="还没有随聊"
-            message="点击右下角的 + 新建一个随聊，开始和 Tron 对话。"
+            title={t("还没有随聊")}
+            message={t("点击右下角的 + 新建一个随聊，开始和 Tron 对话。")}
           />
         )
       ) : (
-        <Text style={styles.mutedText}>请选择一个工作区。</Text>
+        <Text style={styles.mutedText}>{t("请选择一个工作区。")}</Text>
       )}
     </View>
   );
@@ -585,20 +595,20 @@ export function HomeScreen({ navigation }: Props) {
   const renderThemes = () => (
     <View style={styles.section}>
       <SectionHeader
-        title="主题"
+        title={t("主题", "topics")}
         count={projects.length}
         right={
           contentLoading ? <ActivityIndicator size="small" color={palette.accent} /> : null
         }
       />
       {!selectedWorkspaceCode ? (
-        <Text style={styles.mutedText}>请选择一个工作区。</Text>
+        <Text style={styles.mutedText}>{t("请选择一个工作区。")}</Text>
       ) : projects.length === 0 ? (
         <EmptyState
           bare
           icon="folder-open-outline"
-          title="还没有主题"
-          message="在电脑端创建主题后，可以在这里按主题查看会话。"
+          title={t("还没有主题")}
+          message={t("在电脑端创建主题后，可以在这里按主题查看会话。")}
         />
       ) : (
         <View style={styles.projectList}>
@@ -609,7 +619,10 @@ export function HomeScreen({ navigation }: Props) {
               <View key={project.projectCode} style={styles.projectCard}>
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel={`${expanded ? "收起" : "展开"}主题 ${project.name}`}
+                  accessibilityLabel={format(
+                    expanded ? "收起主题 {name}" : "展开主题 {name}",
+                    { name: project.name },
+                  )}
                   accessibilityState={{ expanded }}
                   onPress={() =>
                     setExpandedProjects((previous) => ({
@@ -656,7 +669,7 @@ export function HomeScreen({ navigation }: Props) {
                       ))
                     ) : (
                       <Text style={styles.projectEmpty}>
-                        该主题下还没有手动会话。
+                        {t("该主题下还没有手动会话。")}
                       </Text>
                     )}
                   </View>
@@ -672,29 +685,14 @@ export function HomeScreen({ navigation }: Props) {
   return (
     <Screen>
       <AppHeader
-        eyebrow="PERSONAI"
         title={computer.name}
         subtitle={computer.baseUrl}
-        onBack={() => navigation.goBack()}
         right={
-          <View style={styles.headerActions}>
-            <Badge
-              withDot
-              tone={offline ? "danger" : sessionStatus === "online" ? "accent" : "muted"}
-              label={statusLabel}
-            />
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="外观与皮肤"
-              onPress={() => navigation.navigate("Appearance")}
-              style={({ pressed }) => [
-                styles.headerIconButton,
-                pressed && styles.pressed,
-              ]}
-            >
-              <Ionicons name="color-palette-outline" size={18} color={palette.text} />
-            </Pressable>
-          </View>
+          <Badge
+            withDot
+            tone={offline ? "danger" : sessionStatus === "online" ? "accent" : "muted"}
+            label={statusLabel}
+          />
         }
       />
 
@@ -713,14 +711,16 @@ export function HomeScreen({ navigation }: Props) {
         >
           <EmptyState
             icon="cloud-offline-outline"
-            title="电脑离线"
+            title={t("电脑离线")}
             message={
               sessionError ??
-              "无法连接这台电脑，已清空当前会话内容。请确认电脑端 Tron 在运行，并检查网络与节点地址。"
+              t(
+                "无法连接这台电脑，已清空当前会话内容。请确认电脑端 Tron 在运行，并检查网络与节点地址。",
+              )
             }
             action={
               <Button
-                label="重新连接"
+                label={t("重新连接")}
                 icon="refresh"
                 onPress={() => void probeNow()}
               />
@@ -753,7 +753,7 @@ export function HomeScreen({ navigation }: Props) {
             <View style={styles.bannerWrap}>
               <InlineBanner
                 message={error}
-                actionLabel="重试"
+                actionLabel={t("重试")}
                 onAction={() => void refreshAll(false, true)}
               />
             </View>
@@ -762,11 +762,11 @@ export function HomeScreen({ navigation }: Props) {
           {loadFailed ? (
             <EmptyState
               icon="alert-circle-outline"
-              title="无法加载节点数据"
-              message={error ?? "请稍后重试。"}
+              title={t("无法加载节点数据")}
+              message={error ?? t("请稍后重试。")}
               action={
                 <Button
-                  label="重试"
+                  label={t("重试")}
                   icon="refresh"
                   onPress={() => void refreshAll(false, true)}
                 />
@@ -792,13 +792,15 @@ export function HomeScreen({ navigation }: Props) {
                   options={[
                     {
                       value: "recent",
-                      label: `随聊${
+                      label: `${t("随聊")}${
                         recentSessions.length ? ` ${recentSessions.length}` : ""
                       }`,
                     },
                     {
                       value: "themes",
-                      label: `主题${projects.length ? ` ${projects.length}` : ""}`,
+                      label: `${t("主题", "topics")}${
+                        projects.length ? ` ${projects.length}` : ""
+                      }`,
                     },
                   ]}
                 />
@@ -811,7 +813,7 @@ export function HomeScreen({ navigation }: Props) {
 
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="新建随聊"
+        accessibilityLabel={t("新建随聊")}
         accessibilityState={{ disabled: !canCreate, busy: creating }}
         disabled={!canCreate}
         onPress={() => void createChat()}
@@ -828,61 +830,6 @@ export function HomeScreen({ navigation }: Props) {
         )}
       </Pressable>
     </Screen>
-  );
-}
-
-function DudeCard({
-  dude,
-  opening,
-  onPress,
-}: {
-  dude: Dude;
-  opening: boolean;
-  onPress: () => void;
-}) {
-  const { palette } = useTheme();
-  const styles = useThemedStyles(createStyles);
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`${dude.name}${dude.isMain ? "，主 Dude" : ""}`}
-      accessibilityHint={dude.enabled ? "进入这个 Dude 的会话" : "该 Dude 已停用"}
-      accessibilityState={{ disabled: !dude.enabled, busy: opening }}
-      disabled={!dude.enabled || opening}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.dudeCard,
-        dude.isMain && styles.dudeCardMain,
-        !dude.enabled && styles.dudeDisabled,
-        pressed && styles.pressed,
-      ]}
-    >
-      <View style={styles.dudeTopRow}>
-        <View style={styles.dudeAvatar}>
-          <Ionicons name="sparkles" size={16} color={palette.accent} />
-        </View>
-        <View style={styles.dudeBadges}>
-          {dude.isMain ? <Badge label="主 Dude" tone="accent" /> : null}
-          {!dude.enabled ? <Badge label="已停用" tone="danger" /> : null}
-        </View>
-      </View>
-      <Text style={styles.dudeName} numberOfLines={1}>
-        {dude.name}
-      </Text>
-      <Text style={styles.dudeDescription} numberOfLines={3}>
-        {dude.description?.trim() || "这个 Dude 还没有描述。"}
-      </Text>
-      <View style={styles.dudeFooter}>
-        <Text style={styles.dudeFooterText} numberOfLines={1}>
-          {dude.enabled ? "进入会话" : "已停用"}
-        </Text>
-        {opening ? (
-          <ActivityIndicator size="small" color={palette.accent} />
-        ) : dude.enabled ? (
-          <Ionicons name="arrow-forward" size={14} color={palette.accent} />
-        ) : null}
-      </View>
-    </Pressable>
   );
 }
 
