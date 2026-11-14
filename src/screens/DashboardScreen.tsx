@@ -345,7 +345,6 @@ export function DashboardScreen({ navigation }: Props) {
             label={t("产品")}
             value={products.length}
             hint={format("有节点：{count}", { count: productsWithNodes })}
-            onPress={() => navigation.navigate("Products")}
           />
           <MetricCard
             icon="laptop-outline"
@@ -480,19 +479,17 @@ function MetricCard({
   value,
   hint,
   accent = false,
-  onPress,
 }: {
   icon: IconName;
   label: string;
   value: number | string;
   hint?: string;
   accent?: boolean;
-  onPress?: () => void;
 }) {
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
-  const content = (
-    <>
+  return (
+    <View style={[styles.metricCard, accent && styles.metricCardAccent]}>
       <View style={styles.metricIcon}>
         <Ionicons
           name={icon}
@@ -509,30 +506,7 @@ function MetricCard({
           {hint}
         </Text>
       ) : null}
-    </>
-  );
-
-  if (!onPress) {
-    return (
-      <View style={[styles.metricCard, accent && styles.metricCardAccent]}>
-        {content}
-      </View>
-    );
-  }
-
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.metricCard,
-        accent && styles.metricCardAccent,
-        pressed && styles.pressed,
-      ]}
-    >
-      {content}
-    </Pressable>
+    </View>
   );
 }
 

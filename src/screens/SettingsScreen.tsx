@@ -42,13 +42,7 @@ export function SettingsScreen() {
     useTheme();
   const { t, format, language, setLanguage } = useI18n();
   const styles = useThemedStyles(createStyles);
-  const {
-    products,
-    nodes,
-    addProduct,
-    removeProduct,
-    currentProductCode,
-  } = useConnections();
+  const { products, nodes, addProduct, removeProduct } = useConnections();
 
   const [showAdd, setShowAdd] = useState(false);
   const [code, setCode] = useState("");
@@ -251,64 +245,50 @@ export function SettingsScreen() {
           ) : null}
 
           <View style={styles.productList}>
-            {products.map((product) => {
-              const selected = product.code === currentProductCode;
-              return (
-                <View
-                  key={product.code}
-                  style={[
-                    styles.productRow,
-                    selected && styles.productRowActive,
-                  ]}
-                >
-                  <View
-                    style={[
-                      styles.productIcon,
-                      selected && styles.productIconActive,
+            {products.map((product) => (
+              <View key={product.code} style={styles.productRow}>
+                <View style={styles.productIcon}>
+                  <Ionicons
+                    name="cube-outline"
+                    size={16}
+                    color={palette.muted}
+                  />
+                </View>
+                <View style={styles.productText}>
+                  <View style={styles.productNameRow}>
+                    <Text style={styles.productName} numberOfLines={1}>
+                      {product.name}
+                    </Text>
+                    {product.builtIn ? (
+                      <Badge label={t("内置")} tone="accent" />
+                    ) : null}
+                  </View>
+                  <Text style={styles.productMeta} numberOfLines={1}>
+                    {product.code} · {formatNodeCount(nodeCountFor(product.code))}
+                  </Text>
+                </View>
+                {!product.builtIn ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={format("删除产品：{name}", {
+                      name: product.name,
+                    })}
+                    onPress={() => remove(product)}
+                    hitSlop={8}
+                    style={({ pressed }) => [
+                      styles.trashButton,
+                      pressed && styles.pressed,
                     ]}
                   >
                     <Ionicons
-                      name="cube-outline"
+                      name="trash-outline"
                       size={16}
-                      color={selected ? palette.accent : palette.muted}
+                      color={palette.muted}
                     />
-                  </View>
-                  <View style={styles.productText}>
-                    <View style={styles.productNameRow}>
-                      <Text style={styles.productName} numberOfLines={1}>
-                        {product.name}
-                      </Text>
-                      {product.builtIn ? (
-                        <Badge label={t("内置")} tone="accent" />
-                      ) : null}
-                    </View>
-                    <Text style={styles.productMeta} numberOfLines={1}>
-                      {product.code} · {formatNodeCount(nodeCountFor(product.code))}
-                    </Text>
-                  </View>
-                  {!product.builtIn ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={format("删除产品：{name}", {
-                        name: product.name,
-                      })}
-                      onPress={() => remove(product)}
-                      hitSlop={8}
-                      style={({ pressed }) => [
-                        styles.trashButton,
-                        pressed && styles.pressed,
-                      ]}
-                    >
-                      <Ionicons
-                        name="trash-outline"
-                        size={16}
-                        color={palette.muted}
-                      />
-                    </Pressable>
-                  ) : null}
-                </View>
-              );
-            })}
+                  </Pressable>
+                ) : null}
+              </View>
+            ))}
           </View>
         </Card>
       </ScrollView>
@@ -401,19 +381,12 @@ const createStyles = (c: Palette) =>
       borderColor: c.border,
       backgroundColor: c.surfaceAlt,
     },
-    productRowActive: {
-      borderColor: c.accentBorder,
-      backgroundColor: c.accentSoft,
-    },
     productIcon: {
       width: 32,
       height: 32,
       borderRadius: 10,
       alignItems: "center",
       justifyContent: "center",
-      backgroundColor: c.surface,
-    },
-    productIconActive: {
       backgroundColor: c.surface,
     },
     productText: {

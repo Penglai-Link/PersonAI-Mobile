@@ -5,8 +5,6 @@ export type AddNodeMode = "scan" | "manual";
 export type RootStackParamList = {
   /** Default home screen: product/node/session overview. */
   Dashboard: undefined;
-  /** Product picker and node-management entry point. */
-  Products: undefined;
   /** Saved nodes (computers) of one product. */
   Nodes: { productCode: string };
   AddNode: { productCode: string; mode?: AddNodeMode };

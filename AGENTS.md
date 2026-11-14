@@ -17,7 +17,7 @@ PersonAI Mobile 的 Expo + React Native 移动端，目录与 Tron 主仓库同�
   （`@personai/products/v1`、`@personai/nodes/v1`；启动时兼容迁移旧 `@tron/*`）。内置产品编码为
   `tron`（Tron Harness）、`axiom-agent`、`novel-agent`、`git-deck`，启动时会自动补齐并对齐
   显示名，且不可删除。
-  产品定义（添加/删除）只在设置页维护，产品列表只负责选择。
+  产品定义（添加/删除）只在设置页维护；不保留独立的产品列表页。
 - 每节点配对令牌存 `expo-secure-store`（键 `personai.token.<nodeId>`；旧 `tron.token.*` 会在读取时迁移）。Web 预览没有
   SecureStore，退化为 AsyncStorage（`@personai/secure-token/*`），仅用于调试。
 - JWT 会话：`src/store/nodeSession.tsx`。JWT 只放内存；401 自动用配对令牌重新换取一次；

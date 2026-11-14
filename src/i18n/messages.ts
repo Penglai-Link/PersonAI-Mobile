@@ -163,6 +163,7 @@ export const enMessages: Record<string, string> = {
   "运行失败": "Failed",
   "返回": "Back",
   "返回产品列表": "Back to products",
+  "返回看板": "Back to dashboard",
   "还没有主题": "No topics yet",
   "还没有产品": "No products yet",
   "还没有节点": "No nodes yet",

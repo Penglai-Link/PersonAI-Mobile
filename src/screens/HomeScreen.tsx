@@ -451,9 +451,9 @@ export function HomeScreen({ navigation }: Props) {
           message={t("回到节点列表，选择一台已保存的电脑开始使用。")}
           action={
             <Button
-              label={t("返回产品列表")}
+              label={t("返回看板")}
               icon="swap-horizontal"
-              onPress={() => navigation.navigate("Products")}
+              onPress={() => navigation.navigate("Dashboard")}
             />
           }
         />

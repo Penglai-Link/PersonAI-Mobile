@@ -147,13 +147,12 @@ export function AddNodeScreen({ navigation, route }: Props) {
   const finish = useCallback(
     (targetProductCode: string, notice: string | null) => {
       if (!mountedRef.current) return;
-      // Collapse the add-node flow back to `Products > Nodes` so the node list's
-      // back button always returns to the product list.
+      // Collapse the add-node flow back to the dashboard and the new node list.
       const goToNodes = () =>
         navigation.reset({
           index: 1,
           routes: [
-            { name: "Products" },
+            { name: "Dashboard" },
             { name: "Nodes", params: { productCode: targetProductCode } },
           ],
         });

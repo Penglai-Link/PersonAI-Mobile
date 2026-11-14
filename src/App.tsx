@@ -20,7 +20,6 @@ import { DashboardScreen } from "./screens/DashboardScreen";
 import { ChatScreen } from "./screens/ChatScreen";
 import { HomeScreen } from "./screens/HomeScreen";
 import { NodesScreen } from "./screens/NodesScreen";
-import { ProductsScreen } from "./screens/ProductsScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 import {
   ConnectionsProvider,
@@ -146,7 +145,6 @@ function AppNavigator() {
           }}
         >
           <Stack.Screen name="Dashboard" component={DashboardScreen} />
-          <Stack.Screen name="Products" component={ProductsScreen} />
           <Stack.Screen name="Nodes" component={NodesScreen} />
           <Stack.Screen name="AddNode" component={AddNodeScreen} />
           <Stack.Screen name="Home" component={HomeScreen} />
