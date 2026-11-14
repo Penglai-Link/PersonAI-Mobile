@@ -1,160 +1,192 @@
 # PersonAI Mobile
 
-PersonAI Mobile 是 Person-AI 生态的 Expo + React Native + TypeScript 移动客户端，支持
-iOS、Android 与 iPad。它用于管理局域网或 FRP 穿透后的 Tron 等产品节点。
-仓库目录与 Tron 主仓库同级：`PersonAI-Mobile`。
+**把电脑上的 AI 工作台，装进你的口袋。**
 
-## 技术栈
+<p align="center">
+  <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-3B82F6?style=flat-square"></a>
+  <img alt="Platforms: iOS, Android, iPad" src="https://img.shields.io/badge/platform-iOS%20%7C%20Android%20%7C%20iPad-111827?style=flat-square">
+  <a href="https://expo.dev"><img alt="Expo SDK 58" src="https://img.shields.io/badge/Expo-SDK%2058-000020?style=flat-square&logo=expo&logoColor=white"></a>
+  <a href="https://reactnative.dev"><img alt="React Native 0.88" src="https://img.shields.io/badge/React%20Native-0.88-61DAFB?style=flat-square&logo=react&logoColor=black"></a>
+  <a href="https://github.com/Penglai-Link/PersonAI-Mobile/pulls"><img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-22C55E?style=flat-square"></a>
+</p>
 
-- Expo SDK 58、React Native 0.88、React 19、TypeScript 6。
-- 导航：`@react-navigation/native` + native-stack（不使用 Expo Router），顶层使用自绘
-  侧边抽屉（`src/navigation/Drawer.tsx`），不额外引入原生手势依赖。
-- 安全存储：`expo-secure-store` 保存每个节点的配对令牌。
-- 本地元数据：AsyncStorage 只保存产品、节点、主题偏好与界面语言；不保存会话或消息。
-- 网络：`expo/fetch`；聊天优先使用流式 SSE，运行时拿不到可读 body 时降级为普通
-  `POST /messages` + 轮询。
-- 主题：移动端内置主题（默认 / 海蓝 / 紫罗兰 / 琥珀）+ 浅色 / 深色 / 跟随系统；
-  不读取、不同步节点皮肤。
-- 语言：简体中文 / English，界面文案立即切换并保存在本机。
+PersonAI Mobile 是 Person-AI 生态的开源移动客户端。它把运行在电脑、家庭服务器或内网机器上的
+AI 节点，收进一个随时可用的手机控制台：看板掌握全局，侧边抽屉切换产品，对话继续未完成的工作。
+节点直连、会话不落盘，不经过第三方中转。
 
-## 命令
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" width="220" alt="跨节点看板">
+  <img src="docs/screenshots/drawer-session-tree.png" width="220" alt="产品、节点与会话层级的侧边抽屉">
+  <img src="docs/screenshots/chat-dude.png" width="220" alt="与 Dude 的流式对话">
+</p>
+<p align="center"><sub>跨节点看板 · 产品 / 节点 / 会话树 · 与 Dude 的流式对话（演示数据）</sub></p>
 
-```bash
-npm install
-npm run typecheck             # tsc --noEmit
-npx expo export --platform web
-npx expo-doctor
-npm run start                 # Expo 开发服务器（Expo Go / 开发构建）
-```
+> An open-source mobile console for self-hosted Person-AI nodes. iOS, Android and iPad. Built with
+> Expo, React Native and TypeScript.
 
-本机没有完整 Xcode / Android SDK。需要原生包时使用 EAS Build，不要手写 `ios/` 或 `android/`。
+## 为什么做这个
 
-## 使用流程
+桌面端擅长执行，手机端擅长在场。你不在工位时，仍可能想知道哪台机器上还有会话在跑、某个
+Dude 有没有新的结果，或者顺手把一句话发给远程节点。打开笔记本、连 VPN、再找到那个窗口，
+成本太高。
 
-### 1. 看板与侧边抽屉
+PersonAI Mobile 不做桌面端的缩水版。它只保留移动场景真正需要的部分：看到全局、快速切换、
+继续对话。执行、文件与工具调用仍发生在你的电脑上，手机只负责发起和呈现。
 
-默认首页是移动端看板，展示：
+## 核心体验
 
-- 产品数、有节点的产品数。
-- 节点数与在线节点数。
-- 会话总数与运行中的会话数。
-- 跨节点的 Dude 卡片；点击后按该节点创建 Dude 会话并进入聊天。
-- 运行中的会话列表，点击直接进入对应节点的聊天。
+### 一块看板，聚合所有节点
 
-从屏幕左缘向右滑打开侧边抽屉。
-抽屉头部左侧是 “PersonAI Mobile”，右侧依次是：
+首页同时汇总所有产品与节点：产品数、在线节点、会话总数、运行中会话，以及跨节点的 Dude
+卡片。点开 Dude 或运行中的会话，才会绑定对应节点进入聊天——看板本身不会为了汇总而切换
+当前节点。
 
-- **扫码**图标：直接打开扫码配对流程。
-- **设置**齿轮：进入移动端设置。
+不需要先选电脑再看数据，也不会因为某台机器离线就丢掉其它机器的视图。
 
-抽屉内容只展示**有节点的产品**，结构为：
+### 抽屉就是导航，没有汉堡按钮
+
+从任意页面屏幕左缘向右滑，打开产品 / 节点 / 会话树：
 
 ```text
 产品
 └── 节点
-    └── 会话分组（按产品能力）
+    └── 会话分组
         └── 会话
 ```
 
-- Tron Harness（`tron`）按“主题 / 目录 / 随聊”分组：有 `projectCode` 的会话归入主题，
-  仅在 `directoryCode` 的会话归入目录，两者都没有的归入随聊。
-- 其他产品目前只有一层“会话”列表。
-- 没有“当前节点”的选择态；一个产品下的多个节点都会展开在树里。点击某个会话时才绑定
-  对应节点并打开聊天。
-- 会话与 Dude 数据在展开节点 / 加载看板时按需读取，只放在内存；抽屉每次重新打开会
-  刷新已展开节点，切换节点、App 进入后台或离线时清空。
-- 产品定义在设置页维护；节点通过扫码/手动添加流程创建，并在节点列表中刷新或删除。
+- Tron Harness 按「主题 / 目录 / 随聊」分组，对应项目、目录与会话。
+- 其他产品收敛为单层会话列表。
+- 一个产品下的多个节点会并列展示，不存在“当前节点”的全局选择态。
+- 会话内容按需读取、只存内存；抽屉每次打开时刷新，切换节点或离线后清空。
 
-内置产品定义固定且不可删除，当前包括：
+抽屉右上角固定放扫码配对与设置，导航和配置不再散落在各个页面。
 
-| 编码 | 显示名 |
-| --- | --- |
-| `tron` | Tron Harness |
-| `axiom-agent` | 运维智能体 |
-| `novel-agent` | 小说智能体 |
-| `git-deck` | GitDeck |
+### 对话是流式的
 
-点击产品进入该产品的节点列表。自定义产品的添加与删除移到“设置 → 产品定义”。
+聊天走 SSE，增量渲染回复；运行时拿不到可读流时，自动降级为普通 `POST` + 轮询，并在界面
+说明当前模式。输入框支持多行，发送状态、错误重试与离线状态都有独立反馈。
 
-### 2. 节点列表
+没有 WebView 套壳。消息、会话行与抽屉都是原生组件，长列表滚动和键盘处理交给平台。
 
-只显示当前产品的节点，卡片展示名称、地址与在线状态。
+### 安全边界写进默认值
 
-- 添加节点支持扫码（`tron://pair` 二维码）和手动输入名称/地址/配对令牌。
-- 保存前调用 `POST /api/v1/remote/session` 换取 JWT 并读取 identity；验证通过后才保存，
-  同时记录 `productCode`、`nodeId`、机器名、平台、版本与 profile。
-- 如果 identity 的 `productCode` 与当前产品不一致，会**自动归入 identity 的产品**（必要时
-  自动创建该产品），并弹出明确的“产品已自动纠正”提示。
-- 删除节点会删除 SecureStore 中的配对令牌。
-- 从屏幕左缘向右滑打开抽屉；节点列表仍支持刷新、扫码/手动添加与长按删除。
-- 空状态的“扫码添加”直接进入扫码页；页头 + 图标打开可切换扫码/手动输入的添加节点页。
-
-### 3. 节点首页
-
-进入节点后：内存中换取短期 JWT → 加载 Dude、工作区、随聊、主题会话；原有 Home 功能
-（新建随聊、Dude 会话、工作区切换、主题分组、聊天、流式回复与非流式降级）保留。
-
-### 4. 设置
-
-抽屉中的“设置”页集中管理移动端偏好：
-
-- 外观：浅色 / 深色 / 跟随系统，以及默认 / 海蓝 / 紫罗兰 / 琥珀四种主题色。主题只用
-  内置调色板生成强调色，不读取节点皮肤，也不修改电脑端主题。
-- 界面语言：简体中文 / English；切换立即生效并保存到本机。
-- 产品定义：添加 / 删除产品。上述内置产品不可删除；删除自定义产品会一并删除其节点与
-  配对令牌。产品编码只允许小写字母、数字、点和连字符。
-
-## 安全模型
-
-### 两层令牌
-
-| 令牌 | 用途 | 保存位置 |
+| 数据 | 位置 | 生命周期 |
 | --- | --- | --- |
-| 配对令牌（pairing token） | 只用于 `POST /api/v1/remote/session` 换取 JWT | `expo-secure-store`（按节点 id 分键） |
-| JWT access token | 之后所有 API 的 `Authorization: Bearer` | **仅内存**，不写任何持久化存储 |
+| 配对令牌 | `expo-secure-store`，按节点分键 | 删除节点或重新配对前有效 |
+| JWT access token | **仅内存** | 短期有效；401 自动换新，切换节点、进入后台或离线时清空 |
+| 会话列表与消息 | **仅内存** | 同上，退出应用即消失 |
+| 产品、节点元数据、主题与语言 | AsyncStorage | 持久保存 |
 
-- JWT 过期时间取自 `expiresIn`；剩余不足 60 秒时重新换取。
-- 抽屉会话树会为被展开的节点按需换取短期 JWT，同样只保存在内存（按节点缓存）；App 进入
-  后台时清空。
-- 任何请求返回 HTTP 401 时，自动再用配对令牌换取一次 JWT 并重试；再失败则标记离线并提示
-  “配对令牌无效或已过期，请重新配对”。
-- 节点切换、App 进入后台/非活跃状态、离线时都会清空内存中的 JWT 与会话内容；回到前台后
-  通过健康检查重连。
-- 不使用自研加密、`react-native-ssl-pinning` 或 WebView；JWT 与 HTTPS 由后端与平台 TLS 负责。
+- 远程节点默认只允许 HTTPS；`http://` 需要显式开启“不安全调试”并二次确认，否则在发出任何
+  请求前就被拦截。
+- 401 自动用配对令牌重新换取一次 JWT；再失败则标记离线并提示重新配对。
+- 手机丢失时，没有可复用的会话凭证，也没有聊天记录可读。
 
-### HTTPS 策略
+### 属于移动端的界面
 
-远程节点默认必须使用 HTTPS：
+四套内置主题色、浅色 / 深色 / 跟随系统，以及简体中文 / English。主题完全属于手机端，
+不读取、也不同步节点皮肤；切换语言即时生效并保存在本机。
 
-- `https://...` 正常连接。
-- `http://...`（含省略 scheme 被归一化为 http 的地址）只有在节点被显式标记为
-  “不安全调试”并且用户再次确认后才允许；此时控制台会弹出明文传输风险确认。
-- 未允许时直接显示安全错误，**不会发出任何请求**（添加节点、换取 JWT、健康探测、业务请求
-  都在同一道闸门后）。
-- 扫码配对 URI 的 `secure` 字段用于提示；旧版 v1 二维码按 URL scheme 推断。
-- 电脑端本身也会拒绝非 HTTPS 远程访问（除非在电脑端显式允许不安全 HTTP）；
-  `app.json` 中 iOS ATS / Android cleartext 仅为让“不安全调试”在原生端可用，真正生效的
-  拦截在 JS 安全闸门。
+<p align="center">
+  <img src="docs/screenshots/settings.png" width="230" alt="设置页的外观、语言与产品定义">
+  <img src="docs/screenshots/dashboard-light.png" width="230" alt="浅色模式下的看板">
+</p>
+<p align="center"><sub>主题、语言与产品定义 · 浅色模式（演示数据）</sub></p>
 
-公网接入请在 FRP 或反向代理层终止 TLS，并转发 `X-Forwarded-Proto: https`。
+### 产品是可扩展的容器
 
-### 在线探测与离线
+内置产品开箱可用，也可以在设置里添加自定义产品编码。节点通过扫码或手动输入配对，客户端
+以节点上报的 `productCode` 为准；产品不匹配时会自动归入正确产品并给出提示。
 
-- 前台每 15 秒调用 `GET /api/v1/health`（无需认证）探测当前节点；App 回到前台时立即探测。
-- 探测失败或任意请求出现超时/连接失败，立即标记节点离线、清空首页与聊天内容，并显示
-  “电脑离线”，不展示旧会话。
-- HTTP 业务错误（非传输失败）不会当作离线；401 走上面的 JWT 刷新流程。
-- 恢复在线后自动重连并重新拉取数据。
+| 产品 | 编码 | 移动端能力 |
+| --- | --- | --- |
+| Tron Harness | `tron` | 主题 / 目录 / 随聊分组、Dude、工作区、流式会话 |
+| 运维智能体 | `axiom-agent` | 节点会话、工作区与 Dude 汇总 |
+| 小说智能体 | `novel-agent` | 节点会话、工作区与 Dude 汇总 |
+| GitDeck | `git-deck` | 节点会话、工作区与 Dude 汇总 |
+| 自定义产品 | 小写字母、数字、`.`、`-` | 单层会话列表，可随时添加或删除 |
 
-### 不持久化会话
+内置产品不可删除；删除自定义产品会一并删除其节点与配对令牌。
 
-- AsyncStorage 只保存：产品定义、节点连接元数据、主题偏好与界面语言。
-- 配对令牌只在 SecureStore；JWT、会话列表、消息、流式文本只在内存。
-- 退出应用或重启后回到看板，不恢复任何会话内容。
-- 旧版单一电脑列表（`@tron/connections/v1`）会在首次启动时迁移为 Tron 产品的节点，
-  配对令牌沿用原 SecureStore 键。
+## 适合谁
 
-## 配对二维码
+- 在多台电脑或家庭服务器上跑不同 AI agent，需要统一入口的人。
+- 经常离开工位，但希望随时查看运行状态、继续对话的人。
+- 在意数据边界，不想把会话交给第三方云的人。
+- 想基于 Person-AI 协议扩展自己的移动端入口的开发者。
+
+## 快速开始
+
+### 准备
+
+- 一个已开启远程访问的 Person-AI 节点，推荐 Tron Harness；移动端兼容 v2 与旧版 v1
+  配对二维码。
+- Node.js 22.13+（22 / 24 / 26 系列），建议使用 24 LTS。
+- 安装 Expo Go 的设备，或自建开发构建。
+
+### 运行
+
+```bash
+git clone https://github.com/Penglai-Link/PersonAI-Mobile.git
+cd PersonAI-Mobile
+npm install
+npm run start
+```
+
+启动后按终端提示，用 Expo Go 或开发构建打开。桌面端生成配对二维码（`tron://pair`），在
+抽屉右上角扫码即可；也可以选择手动输入节点名称、地址与配对令牌。
+
+> 公网接入请在 FRP 或反向代理层终止 TLS，并转发 `X-Forwarded-Proto: https`。局域网明文
+> HTTP 只用于可信调试环境，需要逐个节点显式允许。
+
+### 构建原生包
+
+本仓库不要求本机安装完整 Xcode / Android SDK，原生包通过 EAS Build：
+
+```bash
+npx eas-cli build --platform ios --profile preview
+npx eas-cli build --platform android --profile preview
+```
+
+正式分发使用 `--profile production`。
+
+## 技术栈
+
+- Expo SDK 58、React Native 0.88、React 19、TypeScript 6。
+- `@react-navigation/native` + native-stack；顶层是自绘侧边抽屉，不使用 Expo Router，
+  也不引入需要原生重建的 drawer 依赖。
+- 网络与 SSE 使用 `expo/fetch`，流式不可用时降级为普通请求 + 轮询。
+- 配对令牌使用 `expo-secure-store`；产品、节点与偏好使用 AsyncStorage，会话内容永不持久化。
+- 扫码使用 `expo-camera`；主题与文案完全由 `src/theme` 与 `src/i18n` 提供。
+
+## 项目结构
+
+```text
+src/
+  screens/       看板、节点、聊天、设置
+  navigation/    原生栈与自绘抽屉
+  store/         产品 / 节点元数据、JWT 与会话生命周期
+  api/           HTTP、SSE 与响应归一化
+  theme/         内置主题与调色板
+  i18n/          中文源文案与英文翻译
+  components/    卡片、徽标、消息气泡等共享组件
+```
+
+## 开发
+
+```bash
+npm run typecheck             # tsc --noEmit
+npx expo export --platform web
+npx expo-doctor
+```
+
+提交前以上三条必须全部通过。UI 与流程验证以 Web 预览和后端联调为主。开始改动前请阅读
+[AGENTS.md](AGENTS.md)，其中记录了导航、请求闸门、会话持久化与主题 / 国际化的架构约束。
+
+## 集成参考
+
+<details>
+<summary>配对二维码格式与移动端使用的接口</summary>
 
 v2（推荐，桌面端当前格式）：
 
@@ -162,50 +194,42 @@ v2（推荐，桌面端当前格式）：
 tron://pair?v=2&url=<urlencoded baseUrl>&token=<token>&name=<urlencoded machineName>&product=tron&productName=Tron&node=<nodeId>&secure=1
 ```
 
-v1（兼容旧桌面端）：没有 `product` / `node` / `secure` 字段时按 Tron 产品处理，
-`secure` 由 URL scheme 推断：
-
-```text
-tron://pair?v=1&url=<urlencoded baseUrl>&token=<token>&name=<urlencoded machineName>
-```
-
-## 后端接口契约（移动端使用）
+v1 兼容旧桌面端：缺少 `product` / `node` / `secure` 时按 Tron 产品处理，`secure` 由 URL
+scheme 推断。
 
 响应统一为 `{ code, message, data }`，成功 code 为 `SUCCESS` 或 `0`。
 
-- `POST /api/v1/remote/session`
-  - 请求头 `Authorization: Bearer <pairingToken>`，无请求体。
-  - data：`{ accessToken, expiresIn, identity: { protocolVersion, productCode, productName, nodeId, machineName, version, platform, baseUrl, profile } }`。
-- `GET /api/v1/remote/identity`：JWT 认证，返回 identity 对象。
+- `POST /api/v1/remote/session`：`Authorization: Bearer <pairingToken>`，换取
+  `{ accessToken, expiresIn, identity }`。
+- `GET /api/v1/remote/identity`：JWT 认证，返回节点 identity。
 - `GET /api/v1/health`：无需认证，用于在线探测。
-- Dude、工作区、主题会话、随聊、消息、发送、流式等原有接口路径与参数不变，认证改为 JWT；
-  工作区相关的后续请求都会带 `workspaceCode` 查询参数。第一次拉取工作区列表时尚不知道
-  workspaceCode，因此该次引导请求不带该参数。
+- Dude、工作区、主题会话、随聊、消息与流式接口沿用 Tron 后端契约；工作区相关请求携带
+  `workspaceCode`，引导时的第一次工作区列表请求除外。
 
-## 主题与语言
+完整契约以 Tron 主仓库的 `tron-backend/src/adapters/inbound/http/remote_access.rs` 与
+后端 README 为准。
 
-- 主题是移动端本地概念，不消费节点皮肤接口（`GET /api/v1/system/skins` 与
-  `GET /api/v1/system/skins/active` 不再被调用）。
-- 明暗模式存 `@personai/theme/mode/v1`；主题色存 `@personai/theme/preset/v1`。
-- 四种主题只替换强调色与 `onAccent`，surfaces、文字与语义色保持移动端统一规范；
-  强调色的柔色背景和描边由透明度推导。
-- 语言存 `@personai/language/v1`；首次启动按系统 locale 选择中文或英文。
-- 界面文案通过 `src/i18n` 的中文字面量字典翻译，未翻译的字符串回退为中文。
+</details>
 
 ## 已知限制
 
-- 未做真机验证。验证范围是 `tsc`、`expo export --platform web`、`expo-doctor`，以及在
-  无头 Chrome 中跑通 Web 预览的主要流程（抽屉、设置、语言/主题切换、配对、JWT、流式、
-  离线、清理）。
-- Web 预览没有 SecureStore 实现，配对令牌会退化为 AsyncStorage；Web 只用于调试/打包验证，
+- 项目处于早期预览阶段：已通过 `tsc`、Web 导出与 `expo-doctor` 验证，真机与商店分发仍在完善。
+- Web 预览没有 SecureStore，配对令牌会退化为 AsyncStorage；Web 只用于调试和打包验证，
   不是受支持的生产安全目标。
-- 抽屉使用核心 `Animated` + `PanResponder`：任意页面从屏幕左缘向右滑打开，点击遮罩或
-  按原生返回键 / Web Esc 关闭。原生侧滑返回已关闭，避免和抽屉手势争抢左缘；返回统一用
-  页头返回按钮。
-- 会话树每个节点只读取第一个 ACTIVE 工作区；多工作区的节点暂不会把所有工作区的会话合并
-  展示。
-- 只有 Tron Harness 使用“主题 / 目录 / 随聊”分组，其他产品目前是单层会话列表。
-- 节点的“不安全调试”标记保存后不能单独撤销；需要删除节点后重新配对。
-- 消息按纯文本展示，不渲染 Markdown、不处理附件（与原行为一致）。
-- 离开节点回到节点列表时保留当前内存会话；选择另一个节点才会切换并清空。
-- 抽屉会话树只读取每个节点的第一个 ACTIVE 工作区，多工作区节点的会话暂不会全部展示。
+- 会话树每个节点只读取第一个 ACTIVE 工作区，多工作区节点暂不会合并展示。
+- 消息目前按纯文本展示，不渲染 Markdown，也不处理附件。
+- 节点的“不安全调试”标记保存后不能单独撤销，需要删除节点后重新配对。
+
+## 贡献
+
+Issue 和 PR 都欢迎。提交前请先读 [AGENTS.md](AGENTS.md)，并保持三个检查命令通过。涉及
+网络、会话持久化或导航手势的改动，请在 PR 中说明安全边界与验证方式。
+
+如果这个项目对你有用，欢迎点一个 Star，让更多人发现它。
+
+## License
+
+[GNU Affero General Public License v3.0](LICENSE) © Person-AI
+
+PersonAI Mobile 是自由软件：你可以使用、修改和分发，但通过网络提供服务时需要按 AGPL
+公开对应的源代码。
