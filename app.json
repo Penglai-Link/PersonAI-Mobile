@@ -1,0 +1,55 @@
+{
+  "expo": {
+    "name": "PersonAI",
+    "slug": "personai-mobile",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "scheme": "personai",
+    "userInterfaceStyle": "automatic",
+    "backgroundColor": "#08090A",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "chat.personai.mobile",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        },
+        "NSLocalNetworkUsageDescription": "PersonAI 需要访问局域网以连接你的电脑。"
+      }
+    },
+    "android": {
+      "package": "chat.personai.mobile",
+      "adaptiveIcon": {
+        "backgroundColor": "#08090A",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "允许 PersonAI 使用相机扫描配对二维码。",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      "expo-font"
+    ]
+  }
+}

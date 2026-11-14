@@ -1,0 +1,76 @@
+import { ApiError } from "../api/client";
+
+const pad = (value: number) => String(value).padStart(2, "0");
+
+/** Accepts ISO strings, epoch milliseconds and epoch-second strings from the API. */
+export function parseTimestamp(value: string | number | null | undefined): Date | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value <= 0) return null;
+    return new Date(value < 1_000_000_000_000 ? value * 1_000 : value);
+  }
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const numeric = Number(trimmed);
+    return new Date(numeric < 1_000_000_000_000 ? numeric * 1_000 : numeric);
+  }
+  const parsed = new Date(trimmed);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+export function formatRelativeTime(value: string | number | null | undefined): string {
+  const date = parseTimestamp(value);
+  if (!date) return "—";
+  const diffMs = Date.now() - date.getTime();
+  if (diffMs < 45_000) return "刚刚";
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} 天前`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+export function formatDateTime(value: string | number | null | undefined): string {
+  const date = parseTimestamp(value);
+  if (!date) return "尚未连接";
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
+    date.getHours(),
+  )}:${pad(date.getMinutes())}`;
+}
+
+export function isAbortError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error instanceof ApiError && error.code === "ABORTED") return true;
+  return (
+    error.name === "AbortError" ||
+    /aborted|cancelled|canceled|请求已取消|已停止接收回复/i.test(error.message)
+  );
+}
+
+export function describeError(error: unknown): string {
+  if (error instanceof Error) {
+    if (error.name === "TimeoutError") {
+      return error.message || "连接超时，请检查电脑地址和网络";
+    }
+    if (error.name === "ApiError") {
+      return error.message || "请求失败，请稍后重试";
+    }
+    if (
+      /network request failed|failed to fetch|network error|load failed/i.test(
+        error.message,
+      )
+    ) {
+      return "无法连接电脑，请确认地址正确、电脑在线且与手机在同一网络";
+    }
+    return error.message || "发生未知错误";
+  }
+  return "发生未知错误";
+}
+
+export function maskToken(token: string): string {
+  if (!token) return "";
+  if (token.length <= 8) return "••••••••";
+  return `${token.slice(0, 4)}${"•".repeat(8)}${token.slice(-4)}`;
+}
