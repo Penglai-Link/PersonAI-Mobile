@@ -1,13 +1,14 @@
 # PersonAI-Mobile
 
 PersonAI Mobile 的 Expo + React Native 移动端，目录与 Tron 主仓库同级。只允许修改本目录。
-后端契约以 `../Tron/tron-backend/src/adapters/inbound/http/remote_access.rs` 与 README 为准。
+后端契约以 `../Tron/tron-backend/src/adapters/inbound/http/remote_access.rs` 与
+`DEVELOPMENT.md` 的「配对与后端契约」为准。
 
 ## 技术栈
 
 - Expo SDK 58、React Native 0.88、React 19、TypeScript 6。
 - 导航使用 `@react-navigation/native` + native-stack，不使用 Expo Router。顶层导航壳是自绘
-  侧边抽屉（`src/navigation/Drawer.tsx`），不要引入需要原生重建的 drawer 依赖。
+  侧滑菜单（`src/navigation/Drawer.tsx`），不要引入需要原生重建的 drawer 依赖。
 - 网络/SSE 使用 `expo/fetch`；流式不可用时降级为普通 POST + 轮询。
 - 本机没有完整 Xcode / Android SDK。需要原生包时使用 EAS Build，不要手写 `ios/` 或 `android/`。
 
@@ -25,12 +26,12 @@ PersonAI Mobile 的 Expo + React Native 移动端，目录与 Tron 主仓库同�
 - **禁止**把 JWT、会话列表、消息、聊天历史写入 AsyncStorage 或 SecureStore。
 - 所有远程请求必须经过 `NodeSession.request` 或先 `ensureAccessToken()`，以统一处理
   JWT、401 刷新、离线判定与 HTTPS 闸门。
-- 抽屉没有汉堡按钮：任意页面从屏幕左缘向右滑打开；抽屉右上角有扫码与设置入口。原生
-  栈必须保持 `gestureEnabled: false`，让抽屉独占左缘手势；返回统一用 `AppHeader onBack`。
+- 侧滑菜单没有常驻入口按钮：任意页面从屏幕左缘向右滑打开；菜单右上角有扫码与设置入口。原生
+  栈必须保持 `gestureEnabled: false`，让侧滑菜单独占左缘手势；返回统一用 `AppHeader onBack`。
   设置页集中主题、语言与产品定义，不要在其它页面另开入口。
 - 默认首页是看板（`src/screens/DashboardScreen.tsx`）：产品/节点/会话/运行中指标、跨节点
   Dude、运行中会话。看板通过 `loadNodeOverview` 汇总每个节点，不要为汇总切换当前节点。
-- 抽屉会话树：只展示有节点的产品，结构为产品 → 节点 → 会话分组 → 会话；Tron 使用
+- 侧滑菜单会话树：只展示有节点的产品，结构为产品 → 节点 → 会话分组 → 会话；Tron 使用
   主题 / 目录 / 随聊分组，其他产品为单层会话列表。树数据必须通过
   `NodeSession.requestForNode(node, …)` 按节点读取，不得为了读取树数据切换当前节点，也
   不得新增绕过 HTTPS/JWT 的请求路径。会话元数据仅缓存在内存中。
