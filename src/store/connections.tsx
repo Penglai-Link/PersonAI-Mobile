@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as SecureStore from "expo-secure-store";
+import { addNetworkStateListener } from "expo-network";
 import {
   createContext,
   useCallback,
@@ -10,22 +10,20 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Platform } from "react-native";
 
-import { checkHealth, TRON_PRODUCT_CODE, TRON_PRODUCT_NAME } from "../api/tron";
+import {
+  normalizeBaseUrl,
+  transportForBaseUrl,
+  type NodeTransport,
+} from "../api/client";
+import { deleteDeviceKey } from "../crypto/keys";
+import { tunnels, type TunnelTarget } from "../api/tunnel";
+import { TRON_PRODUCT_CODE, TRON_PRODUCT_NAME } from "../api/tron";
 import { translate } from "../i18n";
-import { isSecureBaseUrl, normalizeBaseUrl } from "../api/client";
 
 const PRODUCTS_KEY = "@personai/products/v1";
 const NODES_KEY = "@personai/nodes/v1";
 const LEGACY_PRODUCTS_KEY = "@tron/products/v1";
-const LEGACY_NODES_KEY = "@tron/nodes/v1";
-const LEGACY_COMPUTERS_KEY = "@tron/connections/v1";
-const LEGACY_CURRENT_KEY = "@tron/connections/current";
-const TOKEN_PREFIX = "personai.token.";
-const LEGACY_TOKEN_PREFIX = "tron.token.";
-const WEB_TOKEN_PREFIX = "@personai/secure-token/";
-const LEGACY_WEB_TOKEN_PREFIX = "@tron/secure-token/";
 
 const PRODUCT_CODE_PATTERN = /^[a-z0-9.-]+$/;
 
@@ -39,20 +37,25 @@ export interface Product {
   createdAt: string;
 }
 
-/** A remote node (a computer running one product) saved under a product. */
-export interface SavedNode {
+/**
+ * A paired remote node.
+ *
+ * The device private key for `nodeId` lives in SecureStore
+ * (`personai.devicekey.<nodeId>`); everything else is stored in AsyncStorage.
+ */
+export interface SavedNode extends TunnelTarget {
   id: string;
-  productCode: string;
-  /** `identity.nodeId` reported by the node; null for v1 nodes. */
-  nodeId: string | null;
   name: string;
-  baseUrl: string;
-  /** Explicit insecure-debug confirmation for this node (http:// only). */
-  allowInsecure: boolean;
+  /** `https` -> public (WSS), `http` -> LAN (WS). */
+  transport: NodeTransport;
+  /** LAN endpoint from the pairing QR; preferred when reachable. */
+  lanBaseUrl?: string | null;
+  /** Public endpoint from the pairing QR; fallback when LAN is unreachable. */
+  publicBaseUrl?: string | null;
+  /** `ready.methods` from the last successful authentication. */
+  methods: string[];
   platform: string | null;
   version: string | null;
-  username: string | null;
-  displayName: string | null;
   /** null while the status probe is still running. */
   online: boolean | null;
   lastConnectedAt: string | null;
@@ -63,18 +66,15 @@ export interface SaveNodeInput {
   productCode: string;
   name: string;
   baseUrl: string;
-  pairingToken: string;
-  allowInsecure: boolean;
-  nodeId: string | null;
+  lanBaseUrl?: string | null;
+  publicBaseUrl?: string | null;
+  nodeId: string;
+  nodeKey: string;
+  keyId: string;
+  deviceId: string;
+  methods: string[];
   platform?: string | null;
   version?: string | null;
-  username?: string | null;
-  displayName?: string | null;
-}
-
-interface NodeStatusOutcome {
-  id: string;
-  online: boolean;
 }
 
 interface ConnectionsContextValue {
@@ -89,11 +89,20 @@ interface ConnectionsContextValue {
   selectNode: (node: SavedNode) => void;
   saveNode: (input: SaveNodeInput) => Promise<SavedNode>;
   removeNode: (nodeId: string) => Promise<void>;
+  /** Persists `deviceId`/`methods` after a (re)authentication. */
+  updateNodeSession: (
+    nodeId: string,
+    patch: {
+      deviceId?: string;
+      methods?: string[];
+      baseUrl?: string;
+      transport?: NodeTransport;
+    },
+  ) => void;
   refreshNodeStatuses: () => Promise<void>;
   probing: boolean;
   markNodeOnline: (nodeId: string) => void;
   markNodeOffline: (nodeId: string) => void;
-  getPairingToken: (nodeId: string) => Promise<string | null>;
 }
 
 const ConnectionsContext = createContext<ConnectionsContextValue | null>(null);
@@ -102,55 +111,6 @@ function createId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random()
     .toString(36)
     .slice(2, 8)}`;
-}
-
-function storedTokenKey(nodeId: string): string {
-  return `${TOKEN_PREFIX}${nodeId}`;
-}
-
-async function writeStoredToken(nodeId: string, token: string): Promise<void> {
-  if (Platform.OS === "web") {
-    // SecureStore has no web implementation. The web build is a preview target
-    // only; keep functionality by falling back to AsyncStorage.
-    await AsyncStorage.setItem(`${WEB_TOKEN_PREFIX}${nodeId}`, token);
-    return;
-  }
-  await SecureStore.setItemAsync(storedTokenKey(nodeId), token);
-}
-
-export async function readStoredToken(nodeId: string): Promise<string | null> {
-  if (Platform.OS === "web") {
-    const value = await AsyncStorage.getItem(`${WEB_TOKEN_PREFIX}${nodeId}`);
-    if (value) return value;
-    const legacy = await AsyncStorage.getItem(`${LEGACY_WEB_TOKEN_PREFIX}${nodeId}`);
-    if (legacy) {
-      await AsyncStorage.setItem(`${WEB_TOKEN_PREFIX}${nodeId}`, legacy).catch(
-        () => undefined,
-      );
-    }
-    return legacy;
-  }
-  const value = await SecureStore.getItemAsync(storedTokenKey(nodeId));
-  if (value) return value;
-  const legacy = await SecureStore.getItemAsync(`${LEGACY_TOKEN_PREFIX}${nodeId}`);
-  if (legacy) {
-    await writeStoredToken(nodeId, legacy).catch(() => undefined);
-  }
-  return legacy;
-}
-
-async function deleteStoredToken(nodeId: string): Promise<void> {
-  if (Platform.OS === "web") {
-    await Promise.all([
-      AsyncStorage.removeItem(`${WEB_TOKEN_PREFIX}${nodeId}`),
-      AsyncStorage.removeItem(`${LEGACY_WEB_TOKEN_PREFIX}${nodeId}`),
-    ]);
-    return;
-  }
-  await Promise.all([
-    SecureStore.deleteItemAsync(storedTokenKey(nodeId)),
-    SecureStore.deleteItemAsync(`${LEGACY_TOKEN_PREFIX}${nodeId}`),
-  ]);
 }
 
 const BUILT_IN_PRODUCT_DEFINITIONS: ReadonlyArray<{
@@ -215,6 +175,11 @@ function parseStoredProducts(raw: string | null): Product[] {
   }
 }
 
+/**
+ * Only nodes that completed the new pairing flow are accepted. Records from the
+ * old token/JWT flow cannot be migrated (they have no node/device key), so they
+ * are dropped and must be re-paired by scanning a fresh QR code.
+ */
 function isSavedNode(value: unknown): value is SavedNode {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
@@ -223,8 +188,18 @@ function isSavedNode(value: unknown): value is SavedNode {
     typeof record.name === "string" &&
     typeof record.baseUrl === "string" &&
     typeof record.productCode === "string" &&
-    typeof record.createdAt === "string"
+    typeof record.createdAt === "string" &&
+    typeof record.nodeId === "string" &&
+    record.nodeId.trim().length > 0 &&
+    typeof record.nodeKey === "string" &&
+    typeof record.keyId === "string" &&
+    typeof record.deviceId === "string"
   );
+}
+
+function normalizeTransport(value: unknown, baseUrl: string): NodeTransport {
+  if (value === "public" || value === "lan") return value;
+  return transportForBaseUrl(baseUrl);
 }
 
 function parseStoredNodes(raw: string | null): SavedNode[] {
@@ -232,69 +207,24 @@ function parseStoredNodes(raw: string | null): SavedNode[] {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isSavedNode).map((node) => ({
-      ...node,
-      productCode: node.productCode.trim().toLowerCase(),
-      nodeId: typeof node.nodeId === "string" ? node.nodeId : null,
-      allowInsecure: node.allowInsecure === true,
-      platform: typeof node.platform === "string" ? node.platform : null,
-      version: typeof node.version === "string" ? node.version : null,
-      username: typeof node.username === "string" ? node.username : null,
-      displayName: typeof node.displayName === "string" ? node.displayName : null,
-      lastConnectedAt:
-        typeof node.lastConnectedAt === "string" ? node.lastConnectedAt : null,
-      online: null,
-    }));
-  } catch {
-    return [];
-  }
-}
-
-interface LegacyComputer {
-  id: string;
-  name: string;
-  baseUrl: string;
-  platform: string | null;
-  version: string | null;
-  username: string | null;
-  displayName: string | null;
-  lastConnectedAt: string | null;
-  createdAt: string;
-}
-
-function parseLegacyComputers(raw: string | null): LegacyComputer[] {
-  if (!raw) return [];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((entry): entry is Record<string, unknown> => {
-        return (
-          typeof entry === "object" &&
-          entry !== null &&
-          typeof (entry as Record<string, unknown>).id === "string" &&
-          typeof (entry as Record<string, unknown>).name === "string" &&
-          typeof (entry as Record<string, unknown>).baseUrl === "string"
-        );
-      })
-      .map((entry) => ({
-        id: entry.id as string,
-        name: entry.name as string,
-        baseUrl: entry.baseUrl as string,
-        platform: typeof entry.platform === "string" ? entry.platform : null,
-        version: typeof entry.version === "string" ? entry.version : null,
-        username: typeof entry.username === "string" ? entry.username : null,
-        displayName:
-          typeof entry.displayName === "string" ? entry.displayName : null,
+    return parsed.filter(isSavedNode).map((node) => {
+      const baseUrl = normalizeBaseUrl(node.baseUrl);
+      return {
+        ...node,
+        baseUrl,
+        transport: normalizeTransport((node as { transport?: unknown }).transport, baseUrl),
+        methods: Array.isArray(node.methods)
+          ? node.methods.filter(
+              (method): method is string => typeof method === "string",
+            )
+          : [],
+        platform: typeof node.platform === "string" ? node.platform : null,
+        version: typeof node.version === "string" ? node.version : null,
+        online: null,
         lastConnectedAt:
-          typeof entry.lastConnectedAt === "string"
-            ? entry.lastConnectedAt
-            : null,
-        createdAt:
-          typeof entry.createdAt === "string"
-            ? entry.createdAt
-            : new Date().toISOString(),
-      }));
+          typeof node.lastConnectedAt === "string" ? node.lastConnectedAt : null,
+      };
+    });
   } catch {
     return [];
   }
@@ -332,32 +262,30 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
     currentNodeIdRef.current = currentNodeId;
   }, [currentNodeId]);
 
+  // Online probe goes through the encrypted tunnel only (`ping`), never HTTP.
   const probeNodes = useCallback(async (list: SavedNode[]) => {
     if (!list.length) return;
     if (probingRef.current) return;
     probingRef.current = true;
     setProbing(true);
     try {
-      const outcomes = await Promise.all<NodeStatusOutcome>(
-        list.map(async (node): Promise<NodeStatusOutcome> => {
-          // Never send requests to a node that is not explicitly allowed over
-          // plain HTTP; report it as offline instead.
-          if (!isSecureBaseUrl(node.baseUrl) && !node.allowInsecure) {
-            return { id: node.id, online: false };
-          }
-          try {
-            await checkHealth({ baseUrl: node.baseUrl, timeoutMs: 4_000 });
-            return { id: node.id, online: true };
-          } catch {
-            return { id: node.id, online: false };
-          }
+      const outcomes = await Promise.all(
+        list.map(async (node) => {
+          const endpoint = await tunnels.probeNode(node, 1_200);
+          return { id: node.id, endpoint };
         }),
       );
       const outcomeById = new Map(outcomes.map((outcome) => [outcome.id, outcome]));
       setNodes((previous) => {
         const next = previous.map((node) => {
           const outcome = outcomeById.get(node.id);
-          return outcome ? { ...node, online: outcome.online } : node;
+          if (!outcome) return node;
+          return {
+            ...node,
+            online: outcome.endpoint !== null,
+            baseUrl: outcome.endpoint?.baseUrl ?? node.baseUrl,
+            transport: outcome.endpoint?.transport ?? node.transport,
+          };
         });
         nodesRef.current = next;
         return next;
@@ -377,55 +305,13 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
           AsyncStorage.getItem(NODES_KEY),
         ]);
         if (cancelled) return;
-        // Migrate data written before the app was renamed to PersonAI Mobile.
+        // Products were stored under the old app name; nodes are not migrated.
         const rawProducts =
           newProducts ?? (await AsyncStorage.getItem(LEGACY_PRODUCTS_KEY));
-        const rawNodes = newNodes ?? (await AsyncStorage.getItem(LEGACY_NODES_KEY));
         if (cancelled) return;
 
-        if (!rawProducts && !rawNodes) {
-          // Migrate the v1 single-list app (Tron-only computers) into nodes.
-          const legacyRaw = await AsyncStorage.getItem(LEGACY_COMPUTERS_KEY);
-          if (cancelled) return;
-          const legacy = parseLegacyComputers(legacyRaw);
-          if (legacy.length) {
-            const migrated: SavedNode[] = legacy.map((computer) => ({
-              id: computer.id,
-              productCode: TRON_PRODUCT_CODE,
-              nodeId: null,
-              name: computer.name,
-              baseUrl: computer.baseUrl,
-              allowInsecure: !isSecureBaseUrl(computer.baseUrl),
-              platform: computer.platform,
-              version: computer.version,
-              username: computer.username,
-              displayName: computer.displayName,
-              online: null,
-              lastConnectedAt: computer.lastConnectedAt,
-              createdAt: computer.createdAt,
-            }));
-            productsRef.current = builtInProducts();
-            nodesRef.current = migrated;
-            setProducts(productsRef.current);
-            setNodes(migrated);
-            hydratedRef.current = true;
-            setReady(true);
-            await Promise.all([
-              AsyncStorage.setItem(
-                PRODUCTS_KEY,
-                JSON.stringify(productsRef.current),
-              ),
-              AsyncStorage.setItem(NODES_KEY, JSON.stringify(migrated)),
-              AsyncStorage.removeItem(LEGACY_COMPUTERS_KEY),
-              AsyncStorage.removeItem(LEGACY_CURRENT_KEY),
-            ]).catch(() => undefined);
-            void probeNodes(migrated);
-            return;
-          }
-        }
-
         const storedProducts = parseStoredProducts(rawProducts);
-        const storedNodes = parseStoredNodes(rawNodes);
+        const storedNodes = parseStoredNodes(newNodes);
         productsRef.current = storedProducts;
         nodesRef.current = storedNodes;
         setProducts(storedProducts);
@@ -481,11 +367,12 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
       if (!code) throw new Error(translate("请输入产品编码"));
       if (!PRODUCT_CODE_PATTERN.test(code)) {
         throw new Error(
-        translate("产品编码只能包含小写字母、数字、点和连字符"),
-      );
+          translate("产品编码只能包含小写字母、数字、点和连字符"),
+        );
       }
       if (!name) throw new Error(translate("请输入产品显示名"));
-      if (name.length > 60) throw new Error(translate("产品显示名不能超过 60 个字符"));
+      if (name.length > 60)
+        throw new Error(translate("产品显示名不能超过 60 个字符"));
       if (productsRef.current.some((product) => product.code === code)) {
         throw new Error(translate("该产品编码已存在"));
       }
@@ -514,9 +401,11 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
     const affected = nodesRef.current.filter(
       (node) => node.productCode === normalized,
     );
-    await Promise.all(affected.map((node) => deleteStoredToken(node.id))).catch(
-      () => undefined,
-    );
+    await Promise.all(
+      affected.map((node) =>
+        Promise.all([deleteDeviceKey(node.nodeId), Promise.resolve(tunnels.closeNode(node))]),
+      ),
+    ).catch(() => undefined);
 
     const nextNodes = nodesRef.current.filter(
       (node) => node.productCode !== normalized,
@@ -546,6 +435,23 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
     setCurrentNodeId(node.id);
   }, []);
 
+  const existingLanBaseUrl = (input: SaveNodeInput): string | null => {
+    const existing = nodesRef.current.find(
+      (node) =>
+        node.productCode === normalizeProductCode(input.productCode) &&
+        node.nodeId === input.nodeId.trim(),
+    );
+    return existing?.lanBaseUrl ?? null;
+  };
+  const existingPublicBaseUrl = (input: SaveNodeInput): string | null => {
+    const existing = nodesRef.current.find(
+      (node) =>
+        node.productCode === normalizeProductCode(input.productCode) &&
+        node.nodeId === input.nodeId.trim(),
+    );
+    return existing?.publicBaseUrl ?? null;
+  };
+
   const saveNode = useCallback(
     async (input: SaveNodeInput): Promise<SavedNode> => {
       const productCode = normalizeProductCode(input.productCode);
@@ -555,40 +461,45 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
         throw new Error(translate("目标产品不存在"));
       }
       const baseUrl = normalizeBaseUrl(input.baseUrl);
-      const pairingToken = input.pairingToken.trim();
-      if (!pairingToken) throw new Error(translate("配对令牌不能为空"));
-      if (!isSecureBaseUrl(baseUrl) && !input.allowInsecure) {
-        throw new Error(
-        translate("非 HTTPS 地址需要显式开启不安全调试"),
-      );
-      }
+      const transport = transportForBaseUrl(baseUrl);
+      const lanBaseUrl = input.lanBaseUrl?.trim()
+        ? normalizeBaseUrl(input.lanBaseUrl)
+        : existingLanBaseUrl(input);
+      const publicBaseUrl = input.publicBaseUrl?.trim()
+        ? normalizeBaseUrl(input.publicBaseUrl)
+        : existingPublicBaseUrl(input);
+      if (!input.nodeId.trim()) throw new Error(translate("缺少节点 ID"));
+      if (!input.nodeKey.trim()) throw new Error(translate("缺少节点公钥"));
+      if (!input.keyId.trim()) throw new Error(translate("缺少节点公钥指纹"));
+      if (!input.deviceId.trim()) throw new Error(translate("缺少设备标识"));
 
       const existing = nodesRef.current.find(
         (node) =>
-          node.productCode === productCode &&
-          (input.nodeId
-            ? node.nodeId === input.nodeId
-            : node.baseUrl === baseUrl),
+          node.productCode === productCode && node.nodeId === input.nodeId,
       );
       const now = new Date().toISOString();
       const id = existing?.id ?? createId("node");
       const node: SavedNode = {
         id,
         productCode,
-        nodeId: input.nodeId ?? existing?.nodeId ?? null,
+        nodeId: input.nodeId.trim(),
         name: input.name.trim() || existing?.name || translate("Tron 电脑"),
         baseUrl,
-        allowInsecure: input.allowInsecure,
+        transport,
+        lanBaseUrl,
+        publicBaseUrl,
+        nodeKey: input.nodeKey.trim(),
+        keyId: input.keyId.trim(),
+        deviceId: input.deviceId.trim(),
+        methods: input.methods.filter(
+          (method): method is string => typeof method === "string",
+        ),
         platform: input.platform ?? existing?.platform ?? null,
         version: input.version ?? existing?.version ?? null,
-        username: input.username ?? existing?.username ?? null,
-        displayName: input.displayName ?? existing?.displayName ?? null,
         online: true,
         lastConnectedAt: now,
         createdAt: existing?.createdAt ?? now,
       };
-
-      await writeStoredToken(id, pairingToken);
 
       const next = existing
         ? nodesRef.current.map((item) => (item.id === id ? node : item))
@@ -600,9 +511,42 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const updateNodeSession = useCallback(
+    (nodeId: string, patch: { deviceId?: string; methods?: string[]; baseUrl?: string; transport?: NodeTransport }) => {
+      setNodes((previous) => {
+        let changed = false;
+        const next = previous.map((node) => {
+          if (node.id !== nodeId) return node;
+          const deviceId = patch.deviceId?.trim() || node.deviceId;
+          const methods = patch.methods ?? node.methods;
+          const baseUrl = patch.baseUrl?.trim() || node.baseUrl;
+          const transport = patch.transport ?? node.transport;
+          if (
+            deviceId === node.deviceId &&
+            methods === node.methods &&
+            baseUrl === node.baseUrl &&
+            transport === node.transport
+          ) {
+            return node;
+          }
+          changed = true;
+          return { ...node, deviceId, methods, baseUrl, transport };
+        });
+        if (!changed) return previous;
+        nodesRef.current = next;
+        return next;
+      });
+    },
+    [],
+  );
+
   const removeNode = useCallback(async (nodeId: string) => {
-    await deleteStoredToken(nodeId).catch(() => undefined);
-    const next = nodesRef.current.filter((node) => node.id !== nodeId);
+    const node = nodesRef.current.find((item) => item.id === nodeId);
+    if (node) {
+      tunnels.closeNode(node);
+      await deleteDeviceKey(node.nodeId).catch(() => undefined);
+    }
+    const next = nodesRef.current.filter((item) => item.id !== nodeId);
     nodesRef.current = next;
     setNodes(next);
     if (currentNodeIdRef.current === nodeId) {
@@ -638,13 +582,30 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const getPairingToken = useCallback(async (nodeId: string) => {
-    try {
-      return await readStoredToken(nodeId);
-    } catch {
-      return null;
-    }
-  }, []);
+
+  // Wi-Fi <-> cellular transitions should re-evaluate LAN first. Debounce the
+  // native event because iOS can emit several state changes during a handover.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let disposed = false;
+    const subscription = addNetworkStateListener((state) => {
+      if (disposed) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (!hydratedRef.current) return;
+        if (!state.isConnected) {
+          for (const node of nodesRef.current) markNodeOffline(node.id);
+          return;
+        }
+        void probeNodes(nodesRef.current);
+      }, 600);
+    });
+    return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+      subscription.remove();
+    };
+  }, [markNodeOffline, probeNodes]);
 
   const currentNode = useMemo(
     () => nodes.find((node) => node.id === currentNodeId) ?? null,
@@ -664,17 +625,16 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
       selectNode,
       saveNode,
       removeNode,
+      updateNodeSession,
       refreshNodeStatuses,
       probing,
       markNodeOnline,
       markNodeOffline,
-      getPairingToken,
     }),
     [
       addProduct,
       currentNode,
       currentProductCode,
-      getPairingToken,
       markNodeOffline,
       markNodeOnline,
       nodes,
@@ -687,6 +647,7 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
       saveNode,
       selectNode,
       selectProduct,
+      updateNodeSession,
     ],
   );
 

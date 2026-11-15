@@ -18,6 +18,11 @@ PersonAI Mobile 是 Person-AI 生态的开源移动客户端。它连接你电�
 把每台机器作为一个节点。你可以在一个看板里看到所有节点的状态，从屏幕左缘滑出菜单切换
 产品，并继续之前的对话。手机会直接连接节点，聊天记录不写入手机存储，也不经过第三方中转。
 
+> **实现说明（2026-11）**：移动端已切换到 Tron Remote Protocol：公网 WSS、局域网 WS +
+> Noise IK 应用层加密，业务统一走 `session.*` / `tron.*` RPC，设备私钥存 SecureStore。
+> 下文部分历史段落仍描述旧的“配对令牌 → JWT / HTTPS 闸门”模型，以
+> [`AGENTS.md`](AGENTS.md) 和 [`docs/remote-access-remediation.md`](../docs/remote-access-remediation.md) 为准。
+
 <p align="center">
   <img src="docs/screenshots/dashboard.png" width="220" alt="跨节点看板">
   <img src="docs/screenshots/drawer-session-tree.png" width="220" alt="按产品、节点和会话组织的侧滑菜单">

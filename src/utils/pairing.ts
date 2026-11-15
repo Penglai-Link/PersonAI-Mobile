@@ -1,22 +1,50 @@
-import { isSecureBaseUrl, normalizeBaseUrl } from "../api/client";
-import { formatMessage, translate } from "../i18n";
+/**
+ * Desktop pairing QR parsing.
+ *
+ * One URI, no version field, no token:
+ *
+ *   tron://pair?url=<baseUrl>&name=<machineName>&product=tron&productName=Tron
+ *     &node=<nodeId>&key=<base64url node public key>&kid=<fingerprint>
+ *     &ticket=<short-lived ticket>
+ *
+ * The node public key is pinned here and verified against `kid`; the ticket is
+ * only passed to the first Noise `auth` frame and is never persisted.
+ */
+import { normalizeBaseUrl, transportForBaseUrl, type NodeTransport } from "../api/client";
 import { TRON_PRODUCT_CODE, TRON_PRODUCT_NAME } from "../api/tron";
+import {
+  base64UrlToBytes,
+  isValidKeyId,
+  keyIdsMatch,
+  nodeKeyId,
+} from "../crypto/keys";
+import { formatMessage, translate } from "../i18n";
 
 export interface PairingInfo {
-  /** Pairing protocol version encoded in the QR code. */
-  version: 1 | 2;
+  /** Preferred endpoint; LAN when present, otherwise public. */
   baseUrl: string;
-  /** Long-lived pairing token; only used for the JWT exchange. */
-  token: string;
+  /** LAN endpoint from the QR (`lan` field or an http `url`). */
+  lanBaseUrl?: string;
+  /** Public endpoint from the QR (`public` field or an https `url`). */
+  publicBaseUrl?: string;
+  /** `https` -> public (WSS), `http` -> LAN (WS). */
+  transport: NodeTransport;
   machineName?: string;
   productCode: string;
   productName: string;
-  nodeId: string | null;
-  /** Whether the desktop marked this pairing as HTTPS-only. */
-  secure: boolean;
+  nodeId: string;
+  /** base64url-encoded node static X25519 public key. */
+  nodeKey: string;
+  /** `sha256:<16 hex>` fingerprint computed from the node key. */
+  keyId: string;
+  /** One-time pairing ticket (300s TTL on the desktop). */
+  ticket: string;
 }
 
 const PRODUCT_CODE_PATTERN = /^[a-z0-9.-]+$/;
+
+/** Matches both the protocol URI (`tron://pair`) and the app scheme alias. */
+const PAIRING_URI_PATTERN = /^(?:tron|personai):\/\/pair(?:[/?]|$)/i;
 
 export function isValidProductCode(value: string): boolean {
   return PRODUCT_CODE_PATTERN.test(value);
@@ -46,26 +74,20 @@ function parseQuery(query: string): Record<string, string> {
   return params;
 }
 
-function parseSecureFlag(raw: string | undefined, fallback: boolean): boolean {
-  if (raw === undefined || raw.trim() === "") return fallback;
-  const normalized = raw.trim().toLowerCase();
-  if (["1", "true", "yes", "secure"].includes(normalized)) return true;
-  if (["0", "false", "no", "insecure"].includes(normalized)) return false;
-  return fallback;
+/** True when the scanned/pasted text looks like a pairing URI. */
+export function isPairingUri(raw: string): boolean {
+  return PAIRING_URI_PATTERN.test(raw.trim());
 }
 
 /**
  * Parses the desktop pairing QR code.
  *
- * v2: `tron://pair?v=2&url=<baseUrl>&token=<token>&name=<machineName>&product=tron&productName=Tron&node=<nodeId>&secure=1`
- * v1: `tron://pair?v=1&url=<baseUrl>&token=<token>&name=<machineName>`
- *
- * v1 codes carry no product/node/secure fields: they are treated as Tron and
- * their security flag is inferred from the URL scheme.
+ * Both transports require a node public key: the Noise tunnel pins it and the
+ * `kid` fingerprint must match, otherwise pairing is rejected.
  */
 export function parsePairingUri(raw: string): PairingInfo {
   const value = raw.trim();
-  if (!/^tron:\/\/pair(?:[/?]|$)/i.test(value)) {
+  if (!PAIRING_URI_PATTERN.test(value)) {
     throw new Error(translate("这不是 Tron 的配对二维码"));
   }
 
@@ -73,18 +95,51 @@ export function parsePairingUri(raw: string): PairingInfo {
   const query = queryStart >= 0 ? value.slice(queryStart + 1) : "";
   const params = parseQuery(query.split("#")[0] ?? "");
 
-  const version = params.v ? Number(params.v) : 1;
-  if (version !== 1 && version !== 2) {
+  if (!params.url) throw new Error(translate("二维码缺少节点地址"));
+  if (!params.node) throw new Error(translate("二维码缺少节点 ID"));
+  if (!params.key) throw new Error(translate("二维码缺少节点公钥"));
+  if (!params.kid) throw new Error(translate("二维码缺少节点公钥指纹"));
+  if (!params.ticket) throw new Error(translate("二维码缺少一次性配对票据"));
+
+  const primaryUrl = normalizeBaseUrl(params.url);
+  const lanBaseUrl = params.lan
+    ? normalizeBaseUrl(params.lan)
+    : /^http:\/\//i.test(primaryUrl)
+      ? primaryUrl
+      : undefined;
+  const publicBaseUrl = params.public
+    ? normalizeBaseUrl(params.public)
+    : /^https:\/\//i.test(primaryUrl)
+      ? primaryUrl
+      : undefined;
+  if (lanBaseUrl && !/^http:\/\//i.test(lanBaseUrl)) {
+    throw new Error(translate("二维码中的局域网地址无效"));
+  }
+  if (publicBaseUrl && !/^https:\/\//i.test(publicBaseUrl)) {
+    throw new Error(translate("二维码中的公网地址无效"));
+  }
+  const baseUrl = lanBaseUrl ?? publicBaseUrl ?? primaryUrl;
+  const transport = transportForBaseUrl(baseUrl);
+
+  let nodeKeyBytes: Uint8Array;
+  try {
+    nodeKeyBytes = base64UrlToBytes(params.key);
+  } catch {
+    throw new Error(translate("二维码中的节点公钥格式无效"));
+  }
+  if (nodeKeyBytes.length !== 32) {
+    throw new Error(translate("二维码中的节点公钥长度无效"));
+  }
+  const computedKeyId = nodeKeyId(nodeKeyBytes);
+  if (!isValidKeyId(params.kid) || !keyIdsMatch(params.kid, computedKeyId)) {
     throw new Error(
-      formatMessage("不支持的配对协议版本：{version}", {
-        version: params.v ?? "",
+      formatMessage("节点公钥指纹不匹配：二维码声明 {expected}，实际 {actual}", {
+        expected: params.kid,
+        actual: computedKeyId,
       }),
     );
   }
-  if (!params.url) throw new Error(translate("二维码缺少节点地址"));
-  if (!params.token) throw new Error(translate("二维码缺少配对令牌"));
 
-  const baseUrl = normalizeBaseUrl(params.url);
   const productCode = (params.product || TRON_PRODUCT_CODE)
     .trim()
     .toLowerCase();
@@ -95,20 +150,17 @@ export function parsePairingUri(raw: string): PairingInfo {
     params.productName?.trim() ||
     (productCode === TRON_PRODUCT_CODE ? TRON_PRODUCT_NAME : productCode);
 
-  const urlIsSecure = isSecureBaseUrl(baseUrl);
-  const secure =
-    version === 2
-      ? parseSecureFlag(params.secure, urlIsSecure)
-      : urlIsSecure;
-
   return {
-    version,
     baseUrl,
-    token: params.token,
+    lanBaseUrl,
+    publicBaseUrl,
+    transport,
     machineName: params.name?.trim() || undefined,
     productCode,
     productName,
-    nodeId: params.node?.trim() || null,
-    secure,
+    nodeId: params.node.trim(),
+    nodeKey: params.key.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""),
+    keyId: params.kid.trim().toLowerCase(),
+    ticket: params.ticket.trim(),
   };
 }

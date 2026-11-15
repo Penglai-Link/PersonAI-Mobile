@@ -1,15 +1,15 @@
 # PersonAI-Mobile
 
 PersonAI Mobile 的 Expo + React Native 移动端，目录与 Tron 主仓库同级。只允许修改本目录。
-后端契约以 `../Tron/tron-backend/src/adapters/inbound/http/remote_access.rs` 与
-`DEVELOPMENT.md` 的「配对与后端契约」为准。
+协议与整改契约以 `../docs/remote-access-remediation.md` 为准；客户端实现入口是
+`src/api/tunnel.ts`、`src/api/rpc.ts`、`src/crypto/noise.ts`。
 
 ## 技术栈
 
 - Expo SDK 58、React Native 0.88、React 19、TypeScript 6。
 - 导航使用 `@react-navigation/native` + native-stack，不使用 Expo Router。顶层导航壳是自绘
   侧滑菜单（`src/navigation/Drawer.tsx`），不要引入需要原生重建的 drawer 依赖。
-- 网络/SSE 使用 `expo/fetch`；流式不可用时降级为普通 POST + 轮询。
+- 远程网络使用 WebSocket + Noise IK（`src/api/tunnel.ts`）；业务统一走 RPC，不使用 `expo/fetch` 业务请求，也不再有 SSE 直连。
 - 本机没有完整 Xcode / Android SDK。需要原生包时使用 EAS Build，不要手写 `ios/` 或 `android/`。
 
 ## 架构约束
@@ -19,13 +19,13 @@ PersonAI Mobile 的 Expo + React Native 移动端，目录与 Tron 主仓库同�
   `tron`（Tron Harness）、`axiom-agent`、`novel-agent`、`git-deck`，启动时会自动补齐并对齐
   显示名，且不可删除。
   产品定义（添加/删除）只在设置页维护；不保留独立的产品列表页。
-- 每节点配对令牌存 `expo-secure-store`（键 `personai.token.<nodeId>`；旧 `tron.token.*` 会在读取时迁移）。Web 预览没有
-  SecureStore，退化为 AsyncStorage（`@personai/secure-token/*`），仅用于调试。
-- JWT 会话：`src/store/nodeSession.tsx`。JWT 只放内存；401 自动用配对令牌重新换取一次；
-  切换节点、App 进入后台、离线时清空内存会话与会话内容。
-- **禁止**把 JWT、会话列表、消息、聊天历史写入 AsyncStorage 或 SecureStore。
-- 所有远程请求必须经过 `NodeSession.request` 或先 `ensureAccessToken()`，以统一处理
-  JWT、401 刷新、离线判定与 HTTPS 闸门。
+- 每节点设备私钥存 `expo-secure-store`（键 `personai.devicekey.<nodeId>`）。Web 预览没有
+  SecureStore，退化为 AsyncStorage 并标记 `insecure`，仅用于调试；旧 token/JWT 记录不再迁移。
+- 会话：`src/store/nodeSession.tsx`。连接先做 Noise IK + `auth`，`ready` 返回 deviceId/methods；
+  没有 JWT。切换节点、App 进入后台、离线时关闭隧道并清空内存会话。
+- **禁止**把设备私钥、会话列表、消息、聊天历史写入 AsyncStorage。设备私钥只能进 SecureStore。
+- 所有远程业务请求必须经过 `NodeSession.request` / `requestForNode` 或 `SecureTunnel.call/stream`，
+  以统一处理认证、设备吊销、离线判定与通道重连。
 - 侧滑菜单没有常驻入口按钮：任意页面从屏幕左缘向右滑打开；菜单右上角有扫码与设置入口。原生
   栈必须保持 `gestureEnabled: false`，让侧滑菜单独占左缘手势；返回统一用 `AppHeader onBack`。
   设置页集中主题、语言与产品定义，不要在其它页面另开入口。
@@ -35,16 +35,24 @@ PersonAI Mobile 的 Expo + React Native 移动端，目录与 Tron 主仓库同�
   主题 / 目录 / 随聊分组，其他产品为单层会话列表。树数据必须通过
   `NodeSession.requestForNode(node, …)` 按节点读取，不得为了读取树数据切换当前节点，也
   不得新增绕过 HTTPS/JWT 的请求路径。会话元数据仅缓存在内存中。
-- 非 HTTPS 节点默认拒绝，且必须在发起任何请求前拦截；只有节点显式 `allowInsecure`
-  且用户二次确认后才允许 `http://`。不要新增绕过该闸门的请求代码。
+- 传输只有两种：`https -> public(WSS)`、`http -> lan(WS)`；两种都必须有配对时固定的 `nodeKey`。
+  没有 `allowInsecure` 开关，也不允许明文业务请求；不要新增绕过隧道的请求代码。
 - 主题：`src/theme/`。移动端自有主题，绝不读取或同步节点皮肤；新增或修改界面必须使用
   `useTheme()` / `useThemedStyles(createStyles)`，不允许再引入静态 `colors`；`createStyles`
   工厂放在模块顶层以保持 memo 稳定。
 - 语言：`src/i18n`。新增界面文案必须走 `useI18n()` 的 `t()` / `format()`（非组件模块用
   `translate()`），并在 `src/i18n/messages.ts` 补英文；不要把中文硬编码在 JSX 或参数里。
   语言偏好存 `@personai/language/v1`。
-- 新增业务接口时：响应按 `{code,message,data}` 解析，成功 code 为 `SUCCESS` 或 `0`；
-  工作区相关请求带 `workspaceCode` 查询参数。
+- Agent UI：聊天持久消息使用 `@personai/agent-ui-chat-react-native` 的 `MessageBubble`；
+  A2UI 消息通过其内嵌的 `@personai/agent-ui-a2ui-react-native` 渲染，不要把 web 的
+  `chat-react`/`a2ui-react` 或 CSS 引入 RN。这些包来自同级 `../eliteforge-agent-ui/packages`，
+  使用 npm 版本 `1.0.0-preview.14`（agent-ui 已发布），不要再用 `file:` 本地依赖。
+- 节点支持双地址：`SavedNode` 保存 `lanBaseUrl` / `publicBaseUrl`，`baseUrl` 是当前活动
+  endpoint；`tunnelEndpoints` 按 LAN → public → 当前地址顺序探测，`SecureTunnelPool`
+  逐个回退。网络变化由 `expo-network` 监听并重新 probe；不要假设节点只有单地址。
+- 新增业务接口时：优先注册 `session.*` 通用 RPC；Tron 特有数据用 `tron.*` 方法。
+  `rpc_event.data` 直接是 AG-UI 事件，不要自定义第二套事件名；未知事件必须忽略。
+  工作区相关参数通过 RPC params 传递。
 
 ## 命令
 

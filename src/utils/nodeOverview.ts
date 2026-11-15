@@ -43,8 +43,8 @@ export async function loadNodeOverview(
   node: SavedNode,
   requestForNode: RequestForNode,
 ): Promise<NodeOverview> {
-  return requestForNode<NodeOverview>(node, async ({ baseUrl, token }) => {
-    const workspaces = await listWorkspaceOptions({ baseUrl, token });
+  return requestForNode<NodeOverview>(node, async ({ tunnel }) => {
+    const workspaces = await listWorkspaceOptions({ tunnel });
     const activeWorkspaces = workspaces.filter((workspace) =>
       workspaceStatusActive(workspace.status),
     );
@@ -64,14 +64,14 @@ export async function loadNodeOverview(
 
     const isTronProduct = node.productCode === TRON_PRODUCT_CODE;
     const [sessionGroups, projects, directories, dudes] = await Promise.all([
-      listSessionGroups({ baseUrl, token, workspaceCode }),
+      listSessionGroups({ tunnel, workspaceCode }),
       isTronProduct
-        ? listProjects({ baseUrl, token, workspaceCode }).catch(() => [])
+        ? listProjects({ tunnel, workspaceCode }).catch(() => [])
         : Promise.resolve([]),
       isTronProduct
-        ? listDirectories({ baseUrl, token, workspaceCode }).catch(() => [])
+        ? listDirectories({ tunnel, workspaceCode }).catch(() => [])
         : Promise.resolve([]),
-      listDudes({ baseUrl, token, workspaceCode }).catch(() => []),
+      listDudes({ tunnel, workspaceCode }).catch(() => []),
     ]);
 
     return {

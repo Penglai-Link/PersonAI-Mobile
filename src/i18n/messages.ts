@@ -52,6 +52,8 @@ export const enMessages: Record<string, string> = {
     "Go back to the node list and choose a saved computer to get started.",
   "在电脑端打开配对二维码，或手动输入节点地址与配对令牌。":
     "Open the pairing QR code on your computer, or enter the node address and pairing token manually.",
+  "在电脑端打开配对二维码，或手动粘贴配对链接。":
+    "Open the pairing QR code on your computer, or paste a pairing link manually.",
   "在电脑端创建 Dude 后，这里会显示可用的助手。":
     "Dudes created on your computer will appear here.",
   "在电脑端创建主题后，可以在这里按主题查看会话。":
@@ -372,4 +374,86 @@ export const enMessages: Record<string, string> = {
   "{count} 个会话": "{count} sessions",
   "在电脑端打开配对二维码，对准后自动识别。":
     "Open the pairing QR code on your computer and point the camera at it.",
+
+  "PersonAI 使用相机扫描电脑端展示的配对二维码。你也可以手动粘贴配对链接。":
+    "PersonAI uses the camera to scan the pairing QR code shown on your computer. You can also paste a pairing link manually.",
+  "{count} 个方法": "{count} methods",
+  "{error}\n你仍然可以使用手动输入粘贴配对链接。":
+    "{error}\nYou can still paste a pairing link under manual input.",
+  "与节点的连接发生错误": "The connection to the node failed.",
+  "与节点的连接已断开": "The connection to the node was closed.",
+  "事件队列溢出，已停止接收": "The event queue overflowed and receiving was stopped.",
+  "二维码中的节点公钥格式无效": "The pairing QR code contains an invalid node public key.",
+  "二维码中的节点公钥长度无效": "The node public key in the QR code has an invalid length.",
+  "二维码缺少一次性配对票据": "The pairing QR code is missing the one-time pairing ticket.",
+  "二维码缺少节点 ID": "The pairing QR code is missing the node ID.",
+  "二维码缺少节点公钥": "The pairing QR code is missing the node public key.",
+  "二维码缺少节点公钥指纹": "The pairing QR code is missing the node key fingerprint.",
+  "仅支持 https://（公网）或 http://（局域网）地址":
+    "Only https:// (public) or http:// (LAN) addresses are supported.",
+  "会话数据无效": "Invalid session data.",
+  "传输": "Transport",
+  "公网 WSS + Noise": "Public WSS + Noise",
+  "公网（WSS）": "Public (WSS)",
+  "分片结果无法重组": "The fragmented result could not be reassembled.",
+  "安全握手失败，节点公钥可能已变化":
+    "The secure handshake failed. The node key may have changed.",
+  "安全握手超时，请检查电脑地址和网络":
+    "The secure handshake timed out. Check the address and the network.",
+  "安全通道已关闭": "The secure channel is closed.",
+  "安全通道心跳超时": "The secure channel heartbeat timed out.",
+  "安全通道校验失败，连接已关闭":
+    "Secure channel verification failed; the connection was closed.",
+  "安全通道长时间没有响应": "The secure channel has been idle for too long.",
+  "局域网 WS + Noise": "LAN WS + Noise",
+  "局域网（WS）": "LAN (WS)",
+  "所有业务请求都在加密通道内通过 RPC 传输，配对票据只用于本次认证。":
+    "All business requests travel over RPC inside the encrypted channel; the pairing ticket is only used for this authentication.",
+  "指纹": "Fingerprint",
+  "收到无法解析的远程帧": "Received an unreadable remote frame.",
+  "无法连接到节点，请检查电脑在线且网络可达":
+    "Cannot reach the node. Make sure the computer is online and the network is reachable.",
+  "无法连接到节点，请检查网络": "Cannot reach the node. Check the network.",
+  "电脑已拒绝这台设备（可能已被吊销），请删除节点后重新配对。":
+    "The computer rejected this device (it may have been revoked). Delete the node and pair again.",
+  "电脑没有返回有效的会话标识": "The computer did not return a valid session id.",
+  "电脑没有返回有效的设备标识": "The computer did not return a valid device id.",
+  "电脑离线，请确认电脑端正在运行远程访问，并检查网络与节点地址。":
+    "The computer is offline. Make sure remote access is running and check the network and node address.",
+  "确定删除「{name}」？系统安全存储中的设备密钥也会被删除。":
+    "Delete “{name}”? The device key in secure storage will be deleted too.",
+  "缺少节点 ID": "The node ID is missing.",
+  "缺少节点公钥": "The node public key is missing.",
+  "缺少节点公钥指纹": "The node key fingerprint is missing.",
+  "缺少设备标识": "The device id is missing.",
+  "节点公钥指纹不匹配：二维码声明 {expected}，实际 {actual}":
+    "Node key fingerprint mismatch: the QR code declares {expected}, but the key hashes to {actual}.",
+  "节点公钥格式无效": "Invalid node public key format.",
+  "节点公钥缺失或已变化，请删除节点后重新扫码配对。":
+    "The node public key is missing or has changed. Delete the node and pair again.",
+  "节点公钥长度无效": "Invalid node public key length.",
+  "节点关闭了连接": "The node closed the connection.",
+  "节点没有响应心跳": "The node did not answer the heartbeat.",
+  "节点没有完成设备认证": "The node did not finish device authentication.",
+  "节点没有返回就绪状态": "The node did not return a ready state.",
+  "节点返回的数据过大": "The node returned an oversized payload.",
+  "设备密钥丢失": "Device key missing",
+  "设备密钥无法写入系统安全存储，本次连接仅在当前进程内有效。":
+    "The device key could not be written to secure storage; this connection only lasts for the current process.",
+  "设备密钥缺失，请重新配对。": "The device key is missing. Pair again.",
+  "请求失败（{code}）": "Request failed ({code}).",
+  "请求数据过大，无法发送": "The request payload is too large to send.",
+  "请求超时，请稍后重试": "The request timed out. Try again later.",
+  "请求过多，请稍后重试": "Too many requests. Try again later.",
+  "请粘贴完整的配对链接（以 tron://pair? 开头）":
+    "Paste the complete pairing link (it starts with tron://pair?).",
+  "这台节点的设备密钥已不存在，请删除后重新扫码配对。":
+    "This node's device key no longer exists. Delete it and scan again.",
+  "这台节点的设备密钥已丢失，请删除后重新配对":
+    "This node's device key was lost. Delete it and pair again.",
+  "配对票据无效或已过期，请在电脑端刷新配对二维码后重新扫码配对。":
+    "The pairing ticket is invalid or expired. Refresh the pairing QR code on the computer and scan again.",
+  "配对链接": "Pairing link",
+  "配对链接包含节点公钥与一次性票据。连接时完成 Noise IK 握手，之后只使用保存在安全存储中的设备密钥。":
+    "The pairing link contains the node public key and a one-time ticket. Connecting performs a Noise IK handshake; afterwards only the device key in secure storage is used.",
 };

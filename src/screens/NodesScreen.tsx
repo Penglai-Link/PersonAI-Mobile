@@ -13,7 +13,7 @@ import {
   View,
 } from "react-native";
 
-import { isSecureBaseUrl } from "../api/client";
+import { loadDeviceKey } from "../crypto/keys";
 import { AppHeader } from "../components/AppHeader";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
@@ -55,7 +55,6 @@ export function NodesScreen({ navigation, route }: Props) {
     selectNode,
     removeNode,
     refreshNodeStatuses,
-    getPairingToken,
   } = useConnections();
   const { status: sessionStatus } = useNodeSession();
   const [openingId, setOpeningId] = useState<string | null>(null);
@@ -87,11 +86,13 @@ export function NodesScreen({ navigation, route }: Props) {
       if (openingId) return;
       setOpeningId(node.id);
       try {
-        const pairingToken = await getPairingToken(node.id);
-        if (!pairingToken) {
+        // The device private key is the only credential; if SecureStore lost it
+        // the node must be re-paired.
+        const deviceKey = await loadDeviceKey(node.nodeId);
+        if (!deviceKey) {
           Alert.alert(
-            t("配对令牌丢失"),
-            t("这台节点的配对令牌已不存在，请删除后重新扫码或手动配对。"),
+            t("设备密钥丢失"),
+            t("这台节点的设备密钥已不存在，请删除后重新扫码配对。"),
           );
           return;
         }
@@ -101,7 +102,7 @@ export function NodesScreen({ navigation, route }: Props) {
         setOpeningId(null);
       }
     },
-    [getPairingToken, navigation, openingId, selectNode],
+    [navigation, openingId, selectNode, t],
   );
 
   const remove = useCallback(
@@ -109,7 +110,7 @@ export function NodesScreen({ navigation, route }: Props) {
       confirmDestructive({
         title: t("删除节点"),
         message: format(
-          "确定删除「{name}」？系统安全存储中的配对令牌也会被删除。",
+          "确定删除「{name}」？系统安全存储中的设备密钥也会被删除。",
           { name: node.name },
         ),
         onConfirm: () => {
@@ -120,11 +121,6 @@ export function NodesScreen({ navigation, route }: Props) {
       });
     },
     [format, removeNode, t],
-  );
-
-  const showBlocked = useCallback(
-    (node: SavedNode) => !isSecureBaseUrl(node.baseUrl) && !node.allowInsecure,
-    [],
   );
 
   return (
@@ -166,7 +162,7 @@ export function NodesScreen({ navigation, route }: Props) {
             icon="laptop-outline"
             title={t("还没有节点")}
             message={t(
-              "在电脑端打开配对二维码，或手动输入节点地址与配对令牌。",
+              "在电脑端打开配对二维码，或手动粘贴配对链接。",
             )}
             action={
               <View style={styles.emptyActions}>
@@ -208,7 +204,6 @@ export function NodesScreen({ navigation, route }: Props) {
         >
           <View style={styles.list}>
             {productNodes.map((node) => {
-              const blocked = showBlocked(node);
               const sessionOffline =
                 currentNode?.id === node.id && sessionStatus === "offline";
               const online = sessionOffline ? false : node.online;
@@ -217,7 +212,6 @@ export function NodesScreen({ navigation, route }: Props) {
                   key={node.id}
                   node={node}
                   online={online}
-                  blocked={blocked}
                   current={currentNode?.id === node.id}
                   opening={openingId === node.id}
                   onOpen={() => void openNode(node)}
@@ -240,7 +234,6 @@ export function NodesScreen({ navigation, route }: Props) {
 function NodeCard({
   node,
   online,
-  blocked,
   current,
   opening,
   onOpen,
@@ -248,7 +241,6 @@ function NodeCard({
 }: {
   node: SavedNode;
   online: boolean | null;
-  blocked: boolean;
   current: boolean;
   opening: boolean;
   onOpen: () => void;
@@ -257,9 +249,8 @@ function NodeCard({
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
   const { t, format } = useI18n();
-  const statusLabel = blocked
-    ? t("已阻止")
-    : online === true
+  const statusLabel =
+    online === true
       ? t("在线")
       : online === false
         ? t("离线")
@@ -295,7 +286,7 @@ function NodeCard({
               ) : null}
             </View>
             <View style={styles.statusRow}>
-              <StatusDot online={blocked ? false : online} />
+              <StatusDot online={online} />
               <Text style={styles.statusText}>{statusLabel}</Text>
               {node.platform ? (
                 <Text style={styles.statusText}>· {node.platform}</Text>
@@ -308,16 +299,23 @@ function NodeCard({
           {node.baseUrl}
         </Text>
 
-        {!isSecureBaseUrl(node.baseUrl) ? (
+        <View style={styles.badgeRow}>
           <Badge
             label={
-              node.allowInsecure
-                ? t("不安全调试（非 HTTPS）")
-                : t("非 HTTPS，已阻止")
+              node.transport === "public"
+                ? t("公网 WSS + Noise")
+                : t("局域网 WS + Noise")
             }
-            tone="danger"
+            tone={node.transport === "public" ? "success" : "muted"}
           />
-        ) : null}
+          <Badge label={node.keyId} tone="muted" />
+          {node.methods.length ? (
+            <Badge
+              label={format("{count} 个方法", { count: node.methods.length })}
+              tone="muted"
+            />
+          ) : null}
+        </View>
 
         <View style={styles.cardFooter}>
           <Text style={styles.footerText}>
@@ -378,6 +376,11 @@ const createStyles = (c: Palette) =>
     cardBody: {
       padding: spacing.lg,
       gap: spacing.md,
+    },
+    badgeRow: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: spacing.sm,
     },
     pressed: {
       opacity: 0.75,

@@ -72,7 +72,7 @@ export function SettingsScreen() {
       confirmDestructive({
         title: t("删除产品"),
         message: format(
-          "删除产品「{name}」？该产品下保存的节点和配对令牌也会一并删除。",
+          "删除产品「{name}」？该产品下保存的节点和设备密钥也会一并删除。",
           { name: product.name },
         ),
         onConfirm: () => {

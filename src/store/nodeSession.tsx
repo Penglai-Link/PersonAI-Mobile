@@ -10,57 +10,56 @@ import {
 } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 
-import { translate } from "../i18n";
-
 import {
   ApiError,
-  SecurityError,
-  TimeoutError,
-  assertTransportAllowed,
-  isSecureBaseUrl,
+  isDeviceAuthError,
+  isTicketError,
   isTransportError,
   isUnauthorizedError,
 } from "../api/client";
-import {
-  checkHealth,
-  createRemoteSession,
-  type RemoteIdentity,
-} from "../api/tron";
+import { SecureTunnel, tunnels } from "../api/tunnel";
+import { translate } from "../i18n";
 import { describeError } from "../utils/format";
 import { useConnections, type SavedNode } from "./connections";
 
 export type NodeSessionStatus = "idle" | "connecting" | "online" | "offline";
 
 export interface NodeConnection {
-  baseUrl: string;
-  token: string;
   node: SavedNode;
+  tunnel: SecureTunnel;
+  methods: string[];
 }
 
 export interface NodeSessionContextValue {
   status: NodeSessionStatus;
-  /** Last connection problem (offline/security/pairing-token messages). */
+  /** Last connection problem (offline/pairing/device messages). */
   error: string | null;
-  identity: RemoteIdentity | null;
   currentNode: SavedNode | null;
-  /** Changes when the active node changes (id/address/security flag). */
+  /** Changes when the active node's transport identity changes. */
   nodeKey: string | null;
-  /** Increments whenever in-memory conversations must be dropped. */
+  /** Increments whenever in-memory conversation content must be dropped. */
   contentEpoch: number;
-  accessToken: string | null;
+  /** RPC methods advertised by the active node (`ready.methods`). */
+  methods: string[];
   connect: () => Promise<void>;
   probeNow: () => Promise<boolean>;
-  ensureAccessToken: () => Promise<string>;
-  refreshAccessToken: () => Promise<string>;
-  /** Runs an authenticated call; refreshes the JWT once on HTTP 401. */
-  request: <T>(invoke: (connection: NodeConnection) => Promise<T>) => Promise<T>;
   /**
-   * Runs an authenticated call against a specific saved node without changing
-   * the active node. The short-lived JWT is cached in memory per node.
+   * Runs one call on the active node; re-handshakes once on channel loss.
+   * Streaming sends pass `{ retry: false }` so a mid-run disconnect never
+   * replays the message.
+   */
+  request: <T>(
+    invoke: (connection: NodeConnection) => Promise<T>,
+    options?: { retry?: boolean },
+  ) => Promise<T>;
+  /**
+   * Runs one call against a specific saved node without changing the active
+   * node. Tunnels are shared and idle-closed by the pool.
    */
   requestForNode: <T>(
     node: SavedNode,
     invoke: (connection: NodeConnection) => Promise<T>,
+    options?: { retry?: boolean },
   ) => Promise<T>;
   /** Marks the node offline when the failure looks like a transport problem. */
   reportRequestError: (error: unknown) => void;
@@ -69,59 +68,50 @@ export interface NodeSessionContextValue {
 const NodeSessionContext = createContext<NodeSessionContextValue | null>(null);
 
 const HEALTH_INTERVAL_MS = 15_000;
-const TOKEN_REFRESH_MARGIN_MS = 60_000;
-const OFFLINE_MESSAGE =
-  "电脑离线，请确认电脑端 Tron 正在运行，并检查网络与节点地址。";
-const SECURITY_MESSAGE =
-  "出于安全考虑，已阻止通过非 HTTPS 地址连接该节点。若这是可信局域网中的调试环境，请删除节点并使用“不安全调试”重新配对。";
-const TOKEN_EXPIRED_MESSAGE =
-  "配对令牌无效或已过期，请在电脑端重新生成配对二维码后再试。";
+const HEALTH_TIMEOUT_MS = 5_000;
 
-interface CachedToken {
-  accessToken: string;
-  expiresAt: number;
+const OFFLINE_MESSAGE =
+  "电脑离线，请确认电脑端正在运行远程访问，并检查网络与节点地址。";
+const TICKET_MESSAGE =
+  "配对票据无效或已过期，请在电脑端刷新配对二维码后重新扫码配对。";
+const DEVICE_MESSAGE =
+  "电脑已拒绝这台设备（可能已被吊销），请删除节点后重新配对。";
+const NODE_KEY_MESSAGE =
+  "节点公钥缺失或已变化，请删除节点后重新扫码配对。";
+
+function sessionNodeKey(node: SavedNode | null): string | null {
+  if (!node) return null;
+  // The node identity is stable across LAN/public endpoints. Endpoint changes
+  // must not discard in-memory conversation content.
+  return `${node.id}|${node.nodeId}|${node.keyId}`;
 }
 
-function nodeTokenKey(node: SavedNode): string {
-  return `${node.id}|${node.baseUrl}|${node.allowInsecure ? 1 : 0}`;
+function shouldRetryOnNewTunnel(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  return (
+    error.code === "TUNNEL_CLOSED" ||
+    error.code === "TUNNEL_HEARTBEAT_TIMEOUT" ||
+    error.code === "SOCKET_ERROR"
+  );
 }
 
 export function NodeSessionProvider({ children }: { children: ReactNode }) {
-  const {
-    ready,
-    currentNode,
-    getPairingToken,
-    markNodeOnline,
-    markNodeOffline,
-  } = useConnections();
+  const { ready, currentNode, markNodeOnline, markNodeOffline, updateNodeSession } =
+    useConnections();
 
   const [status, setStatus] = useState<NodeSessionStatus>("idle");
   const [error, setError] = useState<string | null>(null);
-  const [identity, setIdentity] = useState<RemoteIdentity | null>(null);
-  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [methods, setMethods] = useState<string[]>([]);
   const [contentEpoch, setContentEpoch] = useState(0);
 
   const nodeRef = useRef<SavedNode | null>(null);
   const statusRef = useRef<NodeSessionStatus>("idle");
-  const tokenRef = useRef<CachedToken | null>(null);
-  const exchangingRef = useRef<Promise<string> | null>(null);
-  const nodeTokensRef = useRef(new Map<string, CachedToken>());
-  const nodeExchangesRef = useRef(new Map<string, Promise<string>>());
-  const nodeTokenEpochRef = useRef(0);
   const epochRef = useRef(0);
-  const appStateRef = useRef<AppStateStatus | null>((AppState.currentState as AppStateStatus | null) ?? null);
-
-  // Identity of the active node; only transport-relevant fields participate so
-  // online-status updates do not reset the session.
-  const nodeKey = useMemo(
-    () =>
-      currentNode
-        ? `${currentNode.id}|${currentNode.baseUrl}|${
-            currentNode.allowInsecure ? 1 : 0
-          }`
-        : null,
-    [currentNode],
+  const appStateRef = useRef<AppStateStatus | null>(
+    (AppState.currentState as AppStateStatus | null) ?? null,
   );
+
+  const nodeKey = useMemo(() => sessionNodeKey(currentNode), [currentNode]);
 
   useEffect(() => {
     nodeRef.current = currentNode;
@@ -137,284 +127,196 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
     setContentEpoch(epochRef.current);
   }, []);
 
-  const clearToken = useCallback(() => {
-    tokenRef.current = null;
-    setAccessToken(null);
-    setIdentity(null);
-  }, []);
-
   const markOfflineState = useCallback(
     (reason: string) => {
       const node = nodeRef.current;
       if (node) markNodeOffline(node.id);
-      clearToken();
       if (statusRef.current !== "offline") {
         setStatusValue("offline");
         bumpEpoch();
       }
       setError(translate(reason));
+      setMethods([]);
     },
-    [bumpEpoch, clearToken, markNodeOffline, setStatusValue],
+    [bumpEpoch, markNodeOffline, setStatusValue],
   );
 
-  const exchange = useCallback(
-    async (options: { force?: boolean } = {}): Promise<string> => {
-      const node = nodeRef.current;
-      if (!node) {
-        throw new ApiError(translate("尚未选择节点"), { code: "NO_NODE" });
-      }
-      const cached = tokenRef.current;
+  /** Records the authenticated device/session facts on the saved node. */
+  const syncSession = useCallback(
+    (node: SavedNode, tunnel: SecureTunnel): void => {
+      const readyInfo = tunnel.ready;
+      updateNodeSession(node.id, {
+        deviceId: readyInfo.deviceId,
+        methods: readyInfo.methods,
+        baseUrl: tunnel.baseUrl,
+        transport: tunnel.transport,
+      });
+      markNodeOnline(node.id);
+      // Requests for other nodes (dashboard/drawer summaries) must not change
+      // the active node's visible session state.
+      if (nodeRef.current?.id !== node.id) return;
+      setMethods(readyInfo.methods);
+      setError(null);
+      setStatusValue("online");
+    },
+    [markNodeOnline, setStatusValue, updateNodeSession],
+  );
+
+  const describeConnectionError = useCallback(
+    (connectionError: unknown): string => {
+      if (isTicketError(connectionError)) return translate(TICKET_MESSAGE);
+      if (isDeviceAuthError(connectionError)) return translate(DEVICE_MESSAGE);
       if (
-        !options.force &&
-        cached &&
-        cached.expiresAt - Date.now() > TOKEN_REFRESH_MARGIN_MS
+        connectionError instanceof ApiError &&
+        connectionError.code === "DEVICE_KEY_MISSING"
       ) {
-        return cached.accessToken;
+        return translate(NODE_KEY_MESSAGE);
       }
-      if (exchangingRef.current) return exchangingRef.current;
-
-      const promise = (async () => {
-        assertTransportAllowed(node.baseUrl, node.allowInsecure);
-        const pairingToken = await getPairingToken(node.id);
-        if (!pairingToken) {
-          throw new ApiError(
-            translate("这台节点的配对令牌已丢失，请删除后重新配对"),
-            { code: "PAIRING_TOKEN_MISSING" },
-          );
-        }
-        const result = await createRemoteSession({
-          baseUrl: node.baseUrl,
-          pairingToken,
-          timeoutMs: 12_000,
-        });
-        if (nodeRef.current?.id !== node.id) {
-          throw new ApiError(translate("节点已切换"), { code: "NODE_CHANGED" });
-        }
-        tokenRef.current = {
-          accessToken: result.accessToken,
-          expiresAt: Date.now() + result.expiresIn * 1_000,
-        };
-        setAccessToken(result.accessToken);
-        setIdentity(result.identity);
-        setError(null);
-        setStatusValue("online");
-        markNodeOnline(node.id);
-        return result.accessToken;
-      })();
-
-      exchangingRef.current = promise;
-      try {
-        return await promise;
-      } catch (exchangeError) {
-        const stillCurrent = nodeRef.current?.id === node.id;
-        const switched =
-          exchangeError instanceof ApiError &&
-          exchangeError.code === "NODE_CHANGED";
-        if (stillCurrent && !switched) {
-          const reason =
-            exchangeError instanceof SecurityError
-              ? exchangeError.message
-              : exchangeError instanceof ApiError &&
-                  (exchangeError.status === 401 ||
-                    exchangeError.status === 403)
-                ? TOKEN_EXPIRED_MESSAGE
-                : exchangeError instanceof TimeoutError
-                  ? OFFLINE_MESSAGE
-                  : describeError(exchangeError);
-          markOfflineState(reason);
-        }
-        throw exchangeError;
-      } finally {
-        if (exchangingRef.current === promise) exchangingRef.current = null;
-      }
+      if (isTransportError(connectionError)) return translate(OFFLINE_MESSAGE);
+      if (isUnauthorizedError(connectionError)) return translate(DEVICE_MESSAGE);
+      return describeError(connectionError);
     },
-    [
-      getPairingToken,
-      markNodeOnline,
-      markOfflineState,
-      setStatusValue,
-    ],
+    [],
   );
 
-  const exchangeForNode = useCallback(
-    async (
+  const openTunnel = useCallback(
+    async (node: SavedNode, options: { force?: boolean } = {}): Promise<SecureTunnel> => {
+      if (options.force) tunnels.closeNode(node);
+      return tunnels.acquire(node);
+    },
+    [],
+  );
+
+  const invokeForNode = useCallback(
+    async <T,>(
       node: SavedNode,
-      options: { force?: boolean } = {},
-    ): Promise<string> => {
-      const key = nodeTokenKey(node);
-      const cached = nodeTokensRef.current.get(key);
-      if (
-        !options.force &&
-        cached &&
-        cached.expiresAt - Date.now() > TOKEN_REFRESH_MARGIN_MS
-      ) {
-        return cached.accessToken;
-      }
-      const pending = nodeExchangesRef.current.get(key);
-      if (!options.force && pending) return pending;
-
-      const epoch = nodeTokenEpochRef.current;
-      const promise = (async () => {
-        assertTransportAllowed(node.baseUrl, node.allowInsecure);
-        const pairingToken = await getPairingToken(node.id);
-        if (!pairingToken) {
-          throw new ApiError(
-            translate("这台节点的配对令牌已丢失，请删除后重新配对"),
-            { code: "PAIRING_TOKEN_MISSING" },
-          );
-        }
-        const result = await createRemoteSession({
-          baseUrl: node.baseUrl,
-          pairingToken,
-          timeoutMs: 12_000,
-        });
-        if (epoch !== nodeTokenEpochRef.current) {
-          throw new ApiError(translate("请求已取消"), { code: "ABORTED" });
-        }
-        nodeTokensRef.current.set(key, {
-          accessToken: result.accessToken,
-          expiresAt: Date.now() + result.expiresIn * 1_000,
-        });
-        markNodeOnline(node.id);
-        return result.accessToken;
-      })();
-
-      nodeExchangesRef.current.set(key, promise);
+      invoke: (connection: NodeConnection) => Promise<T>,
+      options: { retry?: boolean } = {},
+    ): Promise<T> => {
+      let tunnel: SecureTunnel;
       try {
-        return await promise;
-      } catch (exchangeError) {
-        if (isTransportError(exchangeError)) markNodeOffline(node.id);
-        throw exchangeError;
-      } finally {
-        if (nodeExchangesRef.current.get(key) === promise) {
-          nodeExchangesRef.current.delete(key);
-        }
+        tunnel = await openTunnel(node);
+      } catch (openError) {
+        throw new ApiError(describeConnectionError(openError), {
+          code:
+            openError instanceof ApiError && openError.code
+              ? openError.code
+              : "TUNNEL_CLOSED",
+          status: openError instanceof ApiError ? openError.status : undefined,
+          data: openError,
+        });
+      }
+
+      syncSession(node, tunnel);
+      try {
+        return await invoke({
+          node,
+          tunnel,
+          methods: tunnel.methods,
+        });
+      } catch (firstError) {
+        if (options.retry === false) throw firstError;
+        if (!shouldRetryOnNewTunnel(firstError)) throw firstError;
+        // The secure channel dropped (app resumed, network change, 24h rotation):
+        // re-handshake once and replay the call.
+        const retried = await openTunnel(node, { force: true });
+        syncSession(node, retried);
+        return invoke({
+          node,
+          tunnel: retried,
+          methods: retried.methods,
+        });
       }
     },
-    [getPairingToken, markNodeOffline, markNodeOnline],
+    [describeConnectionError, openTunnel, syncSession],
   );
 
   const requestForNode = useCallback(
     async <T,>(
       node: SavedNode,
       invoke: (connection: NodeConnection) => Promise<T>,
+      options: { retry?: boolean } = {},
     ): Promise<T> => {
-      const key = nodeTokenKey(node);
-      const token = await exchangeForNode(node);
       try {
-        return await invoke({ baseUrl: node.baseUrl, token, node });
-      } catch (firstError) {
-        if (!isUnauthorizedError(firstError)) throw firstError;
-        nodeTokensRef.current.delete(key);
-        const secondToken = await exchangeForNode(node, { force: true });
-        return invoke({ baseUrl: node.baseUrl, token: secondToken, node });
+        return await invokeForNode(node, invoke, options);
+      } catch (requestError) {
+        if (isTransportError(requestError)) markNodeOffline(node.id);
+        throw requestError;
       }
     },
-    [exchangeForNode],
-  );
-
-  const connect = useCallback(async () => {
-    const node = nodeRef.current;
-    if (!node) return;
-    if (statusRef.current === "online" && tokenRef.current) return;
-    setStatusValue("connecting");
-    try {
-      await exchange();
-    } catch {
-      // Offline/security state is already set by `exchange`.
-    }
-  }, [exchange, setStatusValue]);
-
-  const probeNow = useCallback(async (): Promise<boolean> => {
-    const node = nodeRef.current;
-    if (!node) return false;
-    if (!isSecureBaseUrl(node.baseUrl) && !node.allowInsecure) {
-      markOfflineState(SECURITY_MESSAGE);
-      return false;
-    }
-    try {
-      await checkHealth({ baseUrl: node.baseUrl, timeoutMs: 5_000 });
-    } catch {
-      markOfflineState(OFFLINE_MESSAGE);
-      return false;
-    }
-    if (nodeRef.current?.id !== node.id) return false;
-    if (statusRef.current === "online" && tokenRef.current) {
-      setError(null);
-      markNodeOnline(node.id);
-      return true;
-    }
-    try {
-      await exchange();
-      return statusRef.current === "online";
-    } catch {
-      return false;
-    }
-  }, [exchange, markNodeOnline, markOfflineState]);
-
-  const ensureAccessToken = useCallback(async () => exchange(), [exchange]);
-  const refreshAccessToken = useCallback(
-    async () => exchange({ force: true }),
-    [exchange],
-  );
-
-  const reportRequestError = useCallback(
-    (requestError: unknown) => {
-      if (requestError instanceof SecurityError) {
-        markOfflineState(SECURITY_MESSAGE);
-        return;
-      }
-      if (isTransportError(requestError)) {
-        markOfflineState(OFFLINE_MESSAGE);
-        return;
-      }
-      if (isUnauthorizedError(requestError)) {
-        markOfflineState(TOKEN_EXPIRED_MESSAGE);
-      }
-    },
-    [markOfflineState],
+    [invokeForNode, markNodeOffline],
   );
 
   const request = useCallback(
     async <T,>(
       invoke: (connection: NodeConnection) => Promise<T>,
+      options: { retry?: boolean } = {},
     ): Promise<T> => {
       const node = nodeRef.current;
       if (!node) {
         throw new ApiError(translate("尚未选择节点"), { code: "NO_NODE" });
       }
-      const firstToken = await exchange();
       try {
-        return await invoke({ baseUrl: node.baseUrl, token: firstToken, node });
-      } catch (firstError) {
-        if (isUnauthorizedError(firstError)) {
-          // JWT expired or was revoked: exchange the pairing token once more.
-          let secondToken: string;
-          try {
-            secondToken = await exchange({ force: true });
-          } catch {
-            throw firstError;
-          }
-          try {
-            return await invoke({
-              baseUrl: node.baseUrl,
-              token: secondToken,
-              node,
-            });
-          } catch (retryError) {
-            reportRequestError(retryError);
-            throw retryError;
-          }
-        }
-        reportRequestError(firstError);
-        throw firstError;
+        return await invokeForNode(node, invoke, options);
+      } catch (requestError) {
+        if (isTransportError(requestError)) markOfflineState(OFFLINE_MESSAGE);
+        else if (isDeviceAuthError(requestError)) markOfflineState(DEVICE_MESSAGE);
+        else if (isUnauthorizedError(requestError)) markOfflineState(TICKET_MESSAGE);
+        throw requestError;
       }
     },
-    [exchange, reportRequestError],
+    [invokeForNode, markOfflineState],
   );
 
-  // Clear the in-memory JWT and visible conversation state when the app leaves
-  // the foreground, then reconnect on return.
+  const reportRequestError = useCallback(
+    (requestError: unknown) => {
+      if (isTransportError(requestError)) {
+        markOfflineState(OFFLINE_MESSAGE);
+        return;
+      }
+      if (isDeviceAuthError(requestError)) {
+        markOfflineState(DEVICE_MESSAGE);
+        return;
+      }
+      if (isUnauthorizedError(requestError)) {
+        markOfflineState(TICKET_MESSAGE);
+      }
+    },
+    [markOfflineState],
+  );
+
+  const connect = useCallback(async () => {
+    const node = nodeRef.current;
+    if (!node) return;
+    setStatusValue("connecting");
+    try {
+      const tunnel = await tunnels.connectAndPing(node, HEALTH_TIMEOUT_MS);
+      if (nodeRef.current?.id !== node.id) return;
+      syncSession(node, tunnel);
+    } catch (connectError) {
+      if (nodeRef.current?.id !== node.id) return;
+      markOfflineState(describeConnectionError(connectError));
+    }
+  }, [describeConnectionError, markOfflineState, setStatusValue, syncSession]);
+
+  const probeNow = useCallback(async (): Promise<boolean> => {
+    const node = nodeRef.current;
+    if (!node) return false;
+    try {
+      const tunnel = await tunnels.connectAndPing(node, HEALTH_TIMEOUT_MS);
+      if (nodeRef.current?.id !== node.id) return false;
+      syncSession(node, tunnel);
+      return true;
+    } catch (probeError) {
+      if (nodeRef.current?.id === node.id) {
+        markOfflineState(describeConnectionError(probeError));
+      }
+      return false;
+    }
+  }, [describeConnectionError, markOfflineState, syncSession]);
+
+  // Background: close every tunnel and drop in-memory conversation state.
+  // SecureStore keeps the device key; returning to the foreground reconnects.
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (next) => {
       const previous = appStateRef.current;
@@ -426,41 +328,53 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (previous === "active") {
-        clearToken();
-        nodeTokenEpochRef.current += 1;
-        nodeTokensRef.current.clear();
-        nodeExchangesRef.current.clear();
-        setStatusValue("idle");
+        tunnels.closeAll();
+        setMethods([]);
         setError(null);
+        setStatusValue("idle");
         bumpEpoch();
       }
     });
     return () => subscription.remove();
-  }, [bumpEpoch, clearToken, probeNow, setStatusValue]);
+  }, [bumpEpoch, probeNow, setStatusValue]);
 
-  // Foreground health probe: every 15 seconds the node is re-checked; a failure
-  // marks it offline immediately and bumps `contentEpoch` so screens drop data.
+  // Foreground heartbeat: keeps `ready.methods` and online state fresh without
+  // any HTTP probe path.
   useEffect(() => {
     if (!ready || !nodeKey) return;
     const timer = setInterval(() => {
       if (appStateRef.current !== "active") return;
-      void probeNow();
+      const node = nodeRef.current;
+      if (!node) return;
+      if (statusRef.current !== "online") return;
+      void (async () => {
+        try {
+          const tunnel = await tunnels.acquire(node);
+          await tunnel.ping(HEALTH_TIMEOUT_MS);
+          if (nodeRef.current?.id === node.id) markNodeOnline(node.id);
+        } catch {
+          if (nodeRef.current?.id === node.id) {
+            markOfflineState(OFFLINE_MESSAGE);
+          }
+        }
+      })();
     }, HEALTH_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [nodeKey, probeNow, ready]);
+  }, [markNodeOnline, markOfflineState, nodeKey, ready]);
 
-  // Node switch: drop tokens and every screen's content, then reconnect.
+  // Node switch: drop previous tunnels and content, then reconnect.
   useEffect(() => {
     if (!ready) return;
     const node = nodeRef.current;
-    clearToken();
+    tunnels.closeAll();
+    setMethods([]);
     setError(null);
     bumpEpoch();
     setStatusValue(node ? "connecting" : "idle");
     if (node) {
       void connect();
     }
-    // `nodeKey` is the identity of the active node; refs hold mutable state.
+    // `nodeKey` is the transport identity of the active node; refs hold state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeKey, ready]);
 
@@ -468,30 +382,24 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
     () => ({
       status,
       error,
-      identity,
       currentNode,
       nodeKey,
       contentEpoch,
-      accessToken,
+      methods,
       connect,
       probeNow,
-      ensureAccessToken,
-      refreshAccessToken,
       request,
       requestForNode,
       reportRequestError,
     }),
     [
-      accessToken,
       connect,
       contentEpoch,
       currentNode,
-      ensureAccessToken,
       error,
-      identity,
+      methods,
       nodeKey,
       probeNow,
-      refreshAccessToken,
       reportRequestError,
       request,
       requestForNode,

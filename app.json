@@ -13,9 +13,9 @@
       "bundleIdentifier": "chat.personai.mobile",
       "infoPlist": {
         "NSAppTransportSecurity": {
-          "NSAllowsArbitraryLoads": true
+          "NSAllowsLocalNetworking": true
         },
-        "NSLocalNetworkUsageDescription": "PersonAI 需要访问局域网以连接你的电脑。"
+        "NSLocalNetworkUsageDescription": "PersonAI 需要访问局域网，通过加密的 Noise 通道连接你的电脑。"
       }
     },
     "android": {

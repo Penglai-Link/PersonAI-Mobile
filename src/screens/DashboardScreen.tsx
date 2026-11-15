@@ -101,7 +101,7 @@ export function DashboardScreen({ navigation }: Props) {
       nodes
         .map(
           (node) =>
-            `${node.id}|${node.baseUrl}|${node.allowInsecure ? 1 : 0}`,
+            `${node.id}|${node.baseUrl}|${node.transport}|${node.keyId}`,
         )
         .join(","),
     [nodes],
@@ -249,16 +249,14 @@ export function DashboardScreen({ navigation }: Props) {
       setOpeningDudeKey(key);
       setActionError(null);
       try {
-        const session = await requestForNode(item.node, ({ baseUrl, token }) =>
+        const session = await requestForNode(item.node, ({ tunnel }) =>
           item.dude.isMain
             ? createMainDudeSession({
-                baseUrl,
-                token,
+                tunnel,
                 workspaceCode: item.workspaceCode,
               })
             : createDudeSession({
-                baseUrl,
-                token,
+                tunnel,
                 dudeCode: item.dude.dudeCode,
                 workspaceCode: item.workspaceCode,
               }),

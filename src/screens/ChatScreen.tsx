@@ -15,12 +15,9 @@ import {
   View,
 } from "react-native";
 
-import { StreamUnsupportedError, isUnauthorizedError } from "../api/client";
 import {
   listChatMessages,
   listSessionGroups,
-  pollMessagesUntilAssistant,
-  sendChatMessage,
   sendChatMessageStream,
   type ChatMessage,
   type ChatSession,
@@ -30,13 +27,14 @@ import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { InlineBanner } from "../components/InlineBanner";
 import { LoadingView } from "../components/LoadingView";
-import { MessageBubble } from "../components/MessageBubble";
+import { MessageBubble as LocalMessageBubble } from "../components/MessageBubble";
+import { MessageBubble as AgentMessageBubble } from "@personai/agent-ui-chat-react-native";
+import type { ChatMessage as AgentChatMessage } from "@personai/agent-ui-chat-core/headless";
 import { Screen } from "../components/Screen";
 import { SessionRow } from "../components/SessionRow";
 import { Ionicons } from "../components/icons";
 import { useI18n } from "../i18n";
 import type { RootStackParamList } from "../navigation/types";
-import { useConnections } from "../store/connections";
 import { useNodeSession } from "../store/nodeSession";
 import {
   layout,
@@ -58,23 +56,53 @@ function sortByUpdatedDesc(left: ChatSession, right: ChatSession): number {
   );
 }
 
+function toAgentMessage(message: ChatMessage, sessionCode: string): AgentChatMessage {
+  const createdAt =
+    typeof message.createdAt === "string"
+      ? message.createdAt
+      : new Date(message.createdAt).toISOString();
+  return {
+    id: message.id,
+    messageId: message.messageCode ?? String(message.id),
+    sessionId: sessionCode,
+    role: message.role === "USER" ? "USER" : "ASSISTANT",
+    channel: message.channel ?? "MAIN_AGENT",
+    actor: message.actor ?? (message.role === "USER" ? "user" : "assistant"),
+    content: message.content,
+    createdAt,
+    ...(message.a2ui ? { a2ui: message.a2ui } : {}),
+  };
+}
+
 export function ChatScreen({ navigation, route }: Props) {
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
   const { t, format } = useI18n();
-  const { currentNode: computer } = useConnections();
   const {
     status: sessionStatus,
     error: sessionError,
     contentEpoch,
     request: sessionRequest,
-    ensureAccessToken,
-    refreshAccessToken,
     reportRequestError,
     probeNow,
   } = useNodeSession();
   const { width } = useWindowDimensions();
   const wide = width >= layout.wideBreakpoint;
+  const agentTheme = {
+    textColor: palette.text,
+    mutedTextColor: palette.muted,
+    surfaceColor: palette.surface,
+    borderColor: palette.border,
+    primaryColor: palette.accent,
+    primaryTextColor: palette.onAccent,
+    dangerColor: palette.danger,
+    borderRadius: radius.card,
+    spacing: spacing.md,
+    panelColor: palette.background,
+    userBubbleColor: palette.accent,
+    userBubbleTextColor: palette.onAccent,
+    assistantBubbleColor: palette.surface,
+  };
 
   const { session } = route.params;
   const sessionCode = session.sessionCode;
@@ -89,8 +117,6 @@ export function ChatScreen({ navigation, route }: Props) {
   const title =
     session.title?.trim() ||
     (dudeName ? format("与 {name} 的会话", { name: dudeName }) : t("新会话"));
-  const baseUrl = computer?.baseUrl ?? "";
-
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -133,10 +159,9 @@ export function ChatScreen({ navigation, route }: Props) {
       const sequence = ++messagesSeqRef.current;
       if (showSpinner) setLoading(true);
       try {
-        const next = await sessionRequest(({ baseUrl: requestBaseUrl, token }) =>
+        const next = await sessionRequest(({ tunnel }) =>
           listChatMessages({
-            baseUrl: requestBaseUrl,
-            token,
+            tunnel,
             sessionCode,
             workspaceCode,
             dudeCode: effectiveDudeCode,
@@ -176,10 +201,9 @@ export function ChatScreen({ navigation, route }: Props) {
     if (!workspaceCode || sessionStatus !== "online") return null;
     const sequence = ++messagesSeqRef.current;
     try {
-      const next = await sessionRequest(({ baseUrl: requestBaseUrl, token }) =>
+      const next = await sessionRequest(({ tunnel }) =>
         listChatMessages({
-          baseUrl: requestBaseUrl,
-          token,
+          tunnel,
           sessionCode,
           workspaceCode,
           dudeCode: effectiveDudeCode,
@@ -201,10 +225,9 @@ export function ChatScreen({ navigation, route }: Props) {
     let cancelled = false;
     setSidebarLoading(true);
     setSidebarSessions([]);
-    void sessionRequest(({ baseUrl: requestBaseUrl, token }) =>
+    void sessionRequest(({ tunnel }) =>
       listSessionGroups({
-        baseUrl: requestBaseUrl,
-        token,
+        tunnel,
         workspaceCode,
       }),
     )
@@ -247,14 +270,11 @@ export function ChatScreen({ navigation, route }: Props) {
   const handleSend = async () => {
     const content = input.trim();
     if (!content || sending) return;
-    if (!baseUrl || !workspaceCode || sessionStatus !== "online") {
+    if (!workspaceCode || sessionStatus !== "online") {
       setError(t("连接信息缺失或电脑离线，请返回重新连接节点"));
       return;
     }
 
-    const serverCount = messagesRef.current.filter(
-      (message) => !String(message.messageCode).startsWith("local-"),
-    ).length;
     const optimisticId = `local-${Date.now()}`;
     const optimistic: ChatMessage = {
       id: optimisticId,
@@ -279,43 +299,28 @@ export function ChatScreen({ navigation, route }: Props) {
     streamControllerRef.current = controller;
     let accumulated = "";
 
-    const runStream = (token: string) =>
-      sendChatMessageStream({
-        baseUrl,
-        token,
-        sessionCode,
-        workspaceCode,
-        content,
-        dudeCode: effectiveDudeCode,
-        signal: controller.signal,
-        onDelta: (delta) => {
-          accumulated += delta;
-          if (mountedRef.current) setStreamText(accumulated);
-        },
-      });
+    // `session.sendMessage` streams AG-UI events through the tunnel;
+    // `rpc_event.data` is passed to the existing event handling unchanged.
+    const runStream = () =>
+      sessionRequest(
+        ({ tunnel }) =>
+          sendChatMessageStream({
+            tunnel,
+            sessionCode,
+            workspaceCode,
+            content,
+            dudeCode: effectiveDudeCode,
+            signal: controller.signal,
+            onDelta: (delta) => {
+              accumulated += delta;
+              if (mountedRef.current) setStreamText(accumulated);
+            },
+          }),
+        { retry: false },
+      );
 
     try {
-      let result;
-      let token: string;
-      try {
-        token = await ensureAccessToken();
-      } catch (tokenError) {
-        setError(describeError(tokenError));
-        setMessages((previous) =>
-          previous.filter((message) => message.messageCode !== optimisticId),
-        );
-        return;
-      }
-
-      try {
-        result = await runStream(token);
-      } catch (streamError) {
-        if (!isUnauthorizedError(streamError)) throw streamError;
-        // JWT expired mid-session: exchange the pairing token once more.
-        const refreshedToken = await refreshAccessToken();
-        result = await runStream(refreshedToken);
-      }
-
+      const result = await runStream();
       if (!mountedRef.current || activeSessionRef.current !== sessionCode) return;
 
       // `result.messages` only contains this run's messages (the user turn and
@@ -353,75 +358,9 @@ export function ChatScreen({ navigation, route }: Props) {
         return;
       }
 
-      if (sendError instanceof StreamUnsupportedError) {
-        // Documented fallback: plain POST + message polling when the runtime
-        // cannot expose a readable streaming body.
-        setNotice(t("当前环境不支持流式响应，正在切换为普通发送模式。"));
-        try {
-          const fallback = await sessionRequest(({ baseUrl: requestBaseUrl, token }) =>
-            sendChatMessage({
-              baseUrl: requestBaseUrl,
-              token,
-              sessionCode,
-              workspaceCode,
-              content,
-              dudeCode: effectiveDudeCode,
-              signal: controller.signal,
-            }),
-          );
-          if (!mountedRef.current) return;
-          await reloadMessages();
-          const hasAssistant = fallback.messages.some(
-            (message) =>
-              message.role === "ASSISTANT" && message.content.trim().length > 0,
-          );
-          if (!hasAssistant) {
-            const polled = await sessionRequest(({ baseUrl: requestBaseUrl, token }) =>
-              pollMessagesUntilAssistant({
-                baseUrl: requestBaseUrl,
-                token,
-                sessionCode,
-                workspaceCode,
-                dudeCode: effectiveDudeCode,
-                afterCount: serverCount,
-                signal: controller.signal,
-                onMessages: (next) => {
-                  if (
-                    mountedRef.current &&
-                    activeSessionRef.current === sessionCode
-                  ) {
-                    setMessages(next);
-                  }
-                },
-              }),
-            );
-            if (
-              mountedRef.current &&
-              activeSessionRef.current === sessionCode &&
-              polled.length
-            ) {
-              setMessages(polled);
-            }
-          }
-          setStreamText("");
-        } catch (fallbackError) {
-          if (
-            !mountedRef.current ||
-            activeSessionRef.current !== sessionCode
-          ) {
-            return;
-          }
-          if (!isAbortError(fallbackError)) {
-            reportRequestError(fallbackError);
-            setError(describeError(fallbackError));
-            await reloadMessages();
-          }
-        }
-      } else {
-        reportRequestError(sendError);
-        setError(describeError(sendError));
-        await reloadMessages();
-      }
+      reportRequestError(sendError);
+      setError(describeError(sendError));
+      await reloadMessages();
     } finally {
       if (streamControllerRef.current === controller) {
         streamControllerRef.current = null;
@@ -554,10 +493,10 @@ export function ChatScreen({ navigation, route }: Props) {
                 data={messages}
                 keyExtractor={(item) => String(item.messageCode ?? item.id)}
                 renderItem={({ item }) => (
-                  <MessageBubble
-                    role={item.role}
-                    content={item.content}
-                    assistantName={item.role === "ASSISTANT" ? dudeName : null}
+                  <AgentMessageBubble
+                    message={toAgentMessage(item, sessionCode)}
+                    showIdentity={item.role === "ASSISTANT"}
+                    theme={agentTheme}
                   />
                 )}
                 contentContainerStyle={[
@@ -591,7 +530,7 @@ export function ChatScreen({ navigation, route }: Props) {
                 }
                 ListFooterComponent={
                   sending ? (
-                    <MessageBubble
+                    <LocalMessageBubble
                       role="ASSISTANT"
                       content={streamText}
                       assistantName={dudeName}

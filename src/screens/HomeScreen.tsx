@@ -115,10 +115,9 @@ export function HomeScreen({ navigation }: Props) {
     if (!computerId) return null;
     const sequence = ++overviewSeqRef.current;
     // Load workspaces first so every subsequent request can carry workspaceCode.
-    const nextWorkspaces = await sessionRequest(({ baseUrl, token }) =>
+    const nextWorkspaces = await sessionRequest(({ tunnel }) =>
       listWorkspaceOptions({
-        baseUrl,
-        token,
+        tunnel,
         workspaceCode: selectedWorkspaceRef.current,
       }),
     );
@@ -138,10 +137,9 @@ export function HomeScreen({ navigation }: Props) {
         ? selectedWorkspaceRef.current
         : (activeWorkspaces[0]?.workspaceCode ?? null);
 
-    const nextDudes = await sessionRequest(({ baseUrl, token }) =>
+    const nextDudes = await sessionRequest(({ tunnel }) =>
       listDudes({
-        baseUrl,
-        token,
+        tunnel,
         workspaceCode: candidate ?? undefined,
       }),
     );
@@ -163,10 +161,10 @@ export function HomeScreen({ navigation }: Props) {
         setProjects([]);
         setGroups([]);
       }
-      const [nextProjects, nextGroups] = await sessionRequest(({ baseUrl, token }) =>
+      const [nextProjects, nextGroups] = await sessionRequest(({ tunnel }) =>
         Promise.all([
-          listProjects({ baseUrl, token, workspaceCode }),
-          listSessionGroups({ baseUrl, token, workspaceCode }),
+          listProjects({ tunnel, workspaceCode }),
+          listSessionGroups({ tunnel, workspaceCode }),
         ]),
       );
       if (sequence !== contentSeqRef.current) return;
@@ -370,17 +368,15 @@ export function HomeScreen({ navigation }: Props) {
       try {
         const workspaceCodeForDude = selectedWorkspaceRef.current ?? undefined;
         const session = dude.isMain
-          ? await sessionRequest(({ baseUrl, token }) =>
+          ? await sessionRequest(({ tunnel }) =>
               createMainDudeSession({
-                baseUrl,
-                token,
+                tunnel,
                 workspaceCode: workspaceCodeForDude,
               }),
             )
-          : await sessionRequest(({ baseUrl, token }) =>
+          : await sessionRequest(({ tunnel }) =>
               createDudeSession({
-                baseUrl,
-                token,
+                tunnel,
                 dudeCode: dude.dudeCode,
                 workspaceCode: workspaceCodeForDude,
               }),
@@ -412,8 +408,8 @@ export function HomeScreen({ navigation }: Props) {
     setCreating(true);
     setError(null);
     try {
-      const session = await sessionRequest(({ baseUrl, token }) =>
-        createChatSession({ baseUrl, token, workspaceCode }),
+      const session = await sessionRequest(({ tunnel }) =>
+        createChatSession({ tunnel, workspaceCode }),
       );
       navigation.push("Chat", {
         session,

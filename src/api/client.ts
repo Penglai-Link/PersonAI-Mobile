@@ -1,15 +1,17 @@
-import { fetch as expoFetch } from "expo/fetch";
-
+/**
+ * Shared transport helpers for the Tron Remote Protocol.
+ *
+ * All business traffic goes through the Noise tunnel (`requestRaw` below);
+ * there is no HTTP business path and therefore no fetch/XHR shortcut. The only
+ * unauthenticated HTTP endpoint the protocol keeps is `/remote/identity`, which
+ * the mobile client does not need because pairing carries the node identity.
+ */
+import type { SecureTunnel } from "./tunnel";
+import { REMOTE_SECURE_PATH } from "../crypto/framing";
 import { formatMessage, translate } from "../i18n";
 
-export type QueryValue = string | number | boolean | null | undefined;
-export type QueryParams = Record<string, QueryValue>;
-
-export interface ApiEnvelope<T> {
-  code: string;
-  message: string;
-  data: T;
-}
+/** `https` -> public (WSS), `http` -> LAN (WS). */
+export type NodeTransport = "public" | "lan";
 
 export class ApiError extends Error {
   readonly code?: string;
@@ -35,71 +37,38 @@ export class TimeoutError extends Error {
   }
 }
 
-/**
- * Raised before any request when a non-HTTPS node is used without the explicit
- * insecure-debug confirmation.
- */
-export class SecurityError extends Error {
-  constructor(
-    message = translate(
-      "出于安全考虑，PersonAI 只允许通过 HTTPS 连接远程节点。如果这是可信局域网中的调试环境，请在添加节点时显式开启“不安全调试”。",
-    ),
-  ) {
-    super(message);
-    this.name = "SecurityError";
-  }
-}
-
-/**
- * Raised only when an HTTP 2xx stream response has no readable body.
- * The Chat screen turns this into the documented non-streaming fallback.
- */
-export class StreamUnsupportedError extends Error {
-  constructor(message = translate("当前环境不支持流式响应")) {
-    super(message);
-    this.name = "StreamUnsupportedError";
-  }
-}
-
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**
- * Normalizes the base URL used by the desktop client:
+ * Normalizes the node base URL:
  * - trims whitespace
- * - assumes http:// when no scheme is present
+ * - assumes `https://` when no scheme is present
  * - only accepts http/https
  * - removes trailing slashes (keeping a reverse-proxy path prefix intact)
- *
- * A scheme-less address is treated as http:// — callers must still run the
- * HTTPS gate before making requests.
  */
 export function normalizeBaseUrl(input: string): string {
   const raw = input.trim();
   if (!raw) throw new Error(translate("请输入节点地址"));
 
   const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw);
-  const withScheme = hasScheme ? raw : `http://${raw}`;
+  const withScheme = hasScheme ? raw : `https://${raw}`;
 
   if (!/^https?:\/\//i.test(withScheme)) {
     throw new Error(
-      translate("仅支持 https:// 地址；调试可信局域网时可显式允许 http://"),
+      translate("仅支持 https://（公网）或 http://（局域网）地址"),
     );
   }
 
   const match = /^(https?):\/\/([^/?#\s]+)([^?#\s]*)$/i.exec(withScheme);
   if (!match) {
-    throw new Error(
-      translate("地址格式不正确，例如 https://tron.example.com"),
-    );
+    throw new Error(translate("地址格式不正确，例如 https://tron.example.com"));
   }
 
   const [, scheme, host, path] = match;
   if (!host || host.includes("@")) {
-    throw new Error(
-      translate("地址格式不正确，例如 https://192.168.1.10:3000"),
-    );
+    throw new Error(translate("地址格式不正确，例如 https://192.168.1.10:3000"));
   }
   if (path.includes("?") || path.includes("#")) {
     throw new Error(translate("节点地址不能包含查询参数或锚点"));
@@ -108,216 +77,191 @@ export function normalizeBaseUrl(input: string): string {
   return `${scheme.toLowerCase()}://${host}${path}`.replace(/\/+$/, "");
 }
 
-/** True when the address uses the HTTPS scheme. */
-export function isSecureBaseUrl(baseUrl: string): boolean {
+/** True when the address uses the HTTPS scheme (public transport). */
+export function isPublicBaseUrl(baseUrl: string): boolean {
   return /^https:\/\//i.test(baseUrl.trim());
 }
 
-/**
- * Enforces the transport policy: non-HTTPS is rejected before any request
- * unless the node is explicitly marked `allowInsecure` by the user.
- */
-export function assertTransportAllowed(
-  baseUrl: string,
-  allowInsecure: boolean,
-): void {
-  if (isSecureBaseUrl(baseUrl)) return;
-  if (allowInsecure) return;
-  throw new SecurityError();
+export function transportForBaseUrl(baseUrl: string): NodeTransport {
+  return isPublicBaseUrl(baseUrl) ? "public" : "lan";
 }
 
-export function buildTronUrl(
-  baseUrl: string,
-  path: string,
-  query?: QueryParams,
-): string {
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  const entries = Object.entries(query ?? {}).filter(
-    (entry): entry is [string, string | number | boolean] =>
-      entry[1] !== undefined && entry[1] !== null,
-  );
-  if (!entries.length) return `${baseUrl}${normalizedPath}`;
-  const queryString = entries
-    .map(
-      ([key, value]) =>
-        `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`,
-    )
-    .join("&");
-  return `${baseUrl}${normalizedPath}?${queryString}`;
-}
-
-export function buildTronHeaders(
-  token: string | null | undefined,
-  options: {
-    dudeCode?: string | null;
-    json?: boolean;
-    extra?: Record<string, string>;
-  } = {},
-): Record<string, string> {
-  const headers: Record<string, string> = {
-    "Accept-Language": "zh-CN",
-    Accept: "application/json",
-  };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  if (options.json) headers["Content-Type"] = "application/json";
-  if (options.dudeCode) headers["X-Dude-Code"] = options.dudeCode;
-  if (options.extra) Object.assign(headers, options.extra);
-  return headers;
-}
-
-async function readEnvelope(
-  response: Response,
-): Promise<Record<string, unknown> | null> {
-  try {
-    const text = await response.text();
-    if (!text.trim()) return null;
-    const parsed: unknown = JSON.parse(text);
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
+/** Maps a node base URL to its secure WebSocket URL (`/remote/secure`). */
+export function wsUrlForBaseUrl(baseUrl: string): string {
+  const normalized = normalizeBaseUrl(baseUrl);
+  const match = /^(https?):\/\/([^/?#\s]+)([^?#\s]*)$/i.exec(normalized);
+  if (!match) {
+    throw new Error(translate("地址格式不正确，例如 https://tron.example.com"));
   }
+  const [, scheme, host, path] = match;
+  const socketScheme = scheme.toLowerCase() === "https" ? "wss" : "ws";
+  const prefix = path && path !== "/" ? path.replace(/\/+$/, "") : "";
+  return `${socketScheme}://${host}${prefix}${REMOTE_SECURE_PATH}`;
 }
 
-function isSuccessCode(code: string): boolean {
-  // Most endpoints use SUCCESS; chat/Dude endpoints use the AG-UI protocol's "0".
+export function isSuccessCode(code: string): boolean {
+  // RPC results are unwrapped directly; this only tolerates legacy envelopes.
   return code === "SUCCESS" || code === "0";
 }
 
-interface RawRequestParams {
-  baseUrl: string;
-  /** JWT access token for authenticated endpoints; omitted for health. */
-  token?: string | null;
-  path: string;
-  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-  query?: QueryParams;
-  body?: unknown;
-  dudeCode?: string | null;
+/** HTTP-equivalent status for protocol error codes (used for 401/403 UI paths). */
+export function remoteErrorStatus(code: string | undefined): number | undefined {
+  switch (code) {
+    case "REMOTE_HANDSHAKE_FAILED":
+    case "REMOTE_PAIRING_TICKET_INVALID":
+    case "REMOTE_PAIRING_TICKET_EXPIRED":
+      return 401;
+    case "REMOTE_E2EE_REQUIRED":
+      return 426;
+    case "REMOTE_DEVICE_UNKNOWN":
+    case "REMOTE_DEVICE_REVOKED":
+    case "RPC_FORBIDDEN":
+      return 403;
+    case "RPC_METHOD_NOT_FOUND":
+      return 404;
+    case "RPC_INVALID_PARAMS":
+      return 400;
+    case "RPC_UNSUPPORTED":
+      return 501;
+    case "REMOTE_FRAME_TOO_LARGE":
+      return 413;
+    case "REMOTE_BUSY":
+      return 429;
+    case "RPC_INTERNAL":
+      return 500;
+    default:
+      return undefined;
+  }
+}
+
+const TRANSPORT_ERROR_CODES = new Set([
+  "TUNNEL_CLOSED",
+  "TUNNEL_HEARTBEAT_TIMEOUT",
+  "REMOTE_HANDSHAKE_FAILED",
+  "REMOTE_INSECURE_TRANSPORT",
+  "SOCKET_ERROR",
+  "OFFLINE",
+  "REMOTE_HOST_MISMATCH",
+]);
+
+const AUTH_ERROR_CODES = new Set([
+  "REMOTE_HANDSHAKE_FAILED",
+  "REMOTE_DEVICE_UNKNOWN",
+  "REMOTE_DEVICE_REVOKED",
+  "REMOTE_PAIRING_TICKET_INVALID",
+  "REMOTE_PAIRING_TICKET_EXPIRED",
+  "REMOTE_E2EE_REQUIRED",
+]);
+
+export interface RawRequestParams {
+  tunnel: SecureTunnel;
+  /** RPC method name, e.g. `session.list`, `tron.dudes.list`. */
+  method: string;
+  params?: unknown;
   signal?: AbortSignal;
   timeoutMs?: number;
-  extraHeaders?: Record<string, string>;
-}
-
-async function requestRaw(params: RawRequestParams): Promise<Response> {
-  if (params.signal?.aborted) {
-    throw new ApiError(translate("请求已取消"), { code: "ABORTED" });
-  }
-  const controller = new AbortController();
-  let timedOut = false;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, params.timeoutMs ?? 15_000);
-  const abortFromCaller = () => controller.abort();
-  params.signal?.addEventListener("abort", abortFromCaller);
-
-  try {
-    const url = buildTronUrl(params.baseUrl, params.path, params.query);
-    const hasBody = params.body !== undefined;
-    return await expoFetch(url, {
-      method: params.method ?? "GET",
-      headers: buildTronHeaders(params.token, {
-        dudeCode: params.dudeCode,
-        json: hasBody,
-        extra: params.extraHeaders,
-      }),
-      body: hasBody ? JSON.stringify(params.body) : undefined,
-      signal: controller.signal,
-    });
-  } catch (error) {
-    if (timedOut) throw new TimeoutError();
-    if (params.signal?.aborted) {
-      throw new ApiError(translate("请求已取消"), { code: "ABORTED" });
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-    params.signal?.removeEventListener("abort", abortFromCaller);
-  }
-}
-
-export interface TronRequestParams
-  extends Omit<RawRequestParams, "timeoutMs" | "extraHeaders"> {
-  timeoutMs?: number;
-}
-
-/** Requests a JSON endpoint and unwraps `{ code, message, data }`. */
-export async function requestTronJson<T>(
-  params: TronRequestParams,
-): Promise<T> {
-  const response = await requestRaw(params);
-  const envelope = await readEnvelope(response);
-
-  const code =
-    envelope && typeof envelope.code === "string" ? envelope.code : undefined;
-  const serverMessage =
-    envelope && typeof envelope.message === "string"
-      ? envelope.message.trim()
-      : "";
-  const message =
-    serverMessage ||
-    formatMessage("请求失败（HTTP {status}）", { status: response.status });
-  const data = envelope ? envelope.data : undefined;
-
-  if (!response.ok) {
-    throw new ApiError(message, {
-      code,
-      status: response.status,
-      data,
-    });
-  }
-  if (!envelope || !code) {
-    throw new ApiError(translate("服务器返回了无法解析的响应"), {
-      status: response.status,
-    });
-  }
-  if (!isSuccessCode(code)) {
-    throw new ApiError(message, {
-      code,
-      status: response.status,
-      data,
-    });
-  }
-  return data as T;
-}
-
-/** Reads an error envelope from a streaming response without consuming a success body. */
-export async function readStreamError(response: Response): Promise<ApiError> {
-  const envelope = await readEnvelope(response);
-  const code =
-    envelope && typeof envelope.code === "string" ? envelope.code : undefined;
-  const message =
-    envelope && typeof envelope.message === "string" && envelope.message.trim()
-      ? envelope.message
-      : formatMessage("请求失败（HTTP {status}）", {
-          status: response.status,
-        });
-  return new ApiError(message, {
-    code,
-    status: response.status,
-    data: envelope?.data,
-  });
 }
 
 /**
- * True when a failure looks like the node is unreachable (timeout, DNS,
- * connection refused, native fetch network error). HTTP error responses mean the
- * node answered, so they are not transport failures.
+ * Single business entry point: dispatches one RPC over the encrypted tunnel.
+ * Every product API wrapper in this app funnels through here.
+ */
+export async function requestRaw<T>(params: RawRequestParams): Promise<T> {
+  if (params.signal?.aborted) {
+    throw new ApiError(translate("请求已取消"), { code: "ABORTED" });
+  }
+  return params.tunnel.call<T>(params.method, params.params, {
+    signal: params.signal,
+    timeoutMs: params.timeoutMs,
+  });
+}
+
+export interface TronRequestParams extends RawRequestParams {}
+
+/**
+ * RPC request that also tolerates the legacy `{code,message,data}` envelope so
+ * a product pack that still wraps results keeps working.
+ */
+export async function requestTronJson<T>(
+  params: TronRequestParams,
+): Promise<T> {
+  const result = await requestRaw<unknown>(params);
+  if (isRecord(result) && typeof result.code === "string" && "data" in result) {
+    const message =
+      typeof result.message === "string" && result.message.trim()
+        ? result.message
+        : formatMessage("请求失败（{code}）", { code: result.code });
+    if (!isSuccessCode(result.code)) {
+      throw new ApiError(message, {
+        code: result.code,
+        data: result.data,
+      });
+    }
+    return result.data as T;
+  }
+  return result as T;
+}
+
+/**
+ * True when a failure looks like the node is unreachable or the secure channel
+ * is down (timeout, refused socket, failed handshake). RPC errors mean the node
+ * answered, so they do not mark the node offline.
  */
 export function isTransportError(error: unknown): boolean {
   if (error instanceof TimeoutError) return true;
   if (error instanceof ApiError) {
-    // HTTP/protocol errors mean the node answered; only raw fetch failures and
-    // timeouts count as "offline".
+    if (error.code && TRANSPORT_ERROR_CODES.has(error.code)) return true;
+    if (error.code && error.code.startsWith("REMOTE_") && !AUTH_ERROR_CODES.has(error.code)) {
+      return true;
+    }
     return false;
   }
   if (!(error instanceof Error)) return false;
   if (error.name === "AbortError") return false;
-  return /network request failed|failed to fetch|network error|load failed|network connection was lost|internet connection appears to be offline|connection (?:refused|reset)|timed? ?out/i.test(
+  return /network request failed|failed to fetch|network error|load failed|network connection was lost|internet connection appears to be offline|connection (?:refused|reset)|websocket|timed? ?out/i.test(
     error.message,
   );
 }
 
-/** True when the API rejected the JWT (expired or revoked). */
+/** True when authentication failed (device unknown/revoked, ticket rejected). */
 export function isUnauthorizedError(error: unknown): boolean {
-  return error instanceof ApiError && error.status === 401;
+  if (!(error instanceof ApiError)) return false;
+  if (error.status === 401 || error.status === 403) return true;
+  return error.code ? AUTH_ERROR_CODES.has(error.code) : false;
+}
+
+/** True when the device record is gone or revoked and re-pairing is required. */
+export function isDeviceAuthError(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    (error.code === "REMOTE_DEVICE_UNKNOWN" ||
+      error.code === "REMOTE_DEVICE_REVOKED")
+  );
+}
+
+/** True when a pairing ticket was rejected or expired. */
+export function isTicketError(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    (error.code === "REMOTE_PAIRING_TICKET_INVALID" ||
+      error.code === "REMOTE_PAIRING_TICKET_EXPIRED")
+  );
+}
+
+/** True when the node's pinned key no longer matches (key rotation/reset). */
+export function isNodeKeyChangedError(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    (error.code === "REMOTE_NODE_KEY_MISMATCH" ||
+      error.code === "REMOTE_HANDSHAKE_FAILED")
+  );
+}
+
+/** True for RPC-level failures the server answered with a protocol code. */
+export function isRpcError(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    typeof error.code === "string" &&
+    (error.code.startsWith("RPC_") || error.code === "REMOTE_BUSY")
+  );
 }
