@@ -1,6 +1,6 @@
 # PersonAI Mobile
 
-**Your AI workspace, in your pocket.**
+**Your desktop AI workspace, in your pocket.**
 
 <p align="center">
   <a href="README.md">简体中文</a> · <b>English</b> · <a href="README.ja.md">日本語</a>
@@ -14,45 +14,26 @@
   <a href="https://github.com/Penglai-Link/PersonAI-Mobile/pulls"><img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-22C55E?style=flat-square"></a>
 </p>
 
-PersonAI Mobile is the open-source mobile client for the Person-AI ecosystem. It connects the AI
-services on your computers and home servers, treating each machine as a node. See the status of
-every node on one dashboard, swipe out the menu to switch products, and pick up a conversation
-where you left off. The app connects directly to your nodes: chat history is never written to the
-phone and never passes through a third-party relay.
+PersonAI Mobile is the open-source mobile client for the Person-AI ecosystem. It connects the AI products running on your computer or home server: one dashboard for the big picture, one message to continue a conversation, one tap for the approval that matters.
+
+Execution, files, and tools stay on the computer. The phone is where you start work, check progress, and keep talking.
 
 <p align="center">
   <img src="docs/screenshots/dashboard.png" width="220" alt="Cross-node dashboard">
-  <img src="docs/screenshots/drawer-session-tree.png" width="220" alt="Side menu organized by product, node, and session">
+  <img src="docs/screenshots/drawer-session-tree.png" width="220" alt="Drawer organized by product, node and session">
   <img src="docs/screenshots/chat-dude.png" width="220" alt="Streaming conversation with a Dude">
 </p>
-<p align="center"><sub>Cross-node dashboard · products, nodes, and sessions · a conversation with a Dude (Chinese UI, demo data)</sub></p>
+<p align="center"><sub>Cross-node dashboard · products, nodes and sessions · conversation with a Dude (Chinese UI, demo data)</sub></p>
 
-## Why this exists
+## One dashboard for every node
 
-Desktop tools execute work; a phone keeps you reachable. Away from your desk, you may want to know
-which machine is still running a task, whether a Dude has returned a result, or send one more
-instruction to a remote node. Opening a laptop, connecting a VPN, and finding the right window is
-too much effort for that.
+The home screen summarizes every product and node: product count, online nodes, sessions, running tasks, and Dude cards from different machines.
 
-PersonAI Mobile is not a smaller desktop client. It keeps the three things that matter on the move:
-a clear overview, fast switching, and conversations you can continue. Execution, files, and tool
-calls stay on your computer; the phone starts work and shows the results.
+You do not have to pick a computer first, and one offline machine never hides the others. A node is only contacted when you open a session; the dashboard itself does not interrupt the conversation you are in.
 
-## What it does
+## Swipe from the left edge to open your sessions
 
-### One dashboard for every node
-
-Home collects every product and node: product count, online nodes, total sessions, running tasks,
-and Dude cards from different nodes. The app connects to a node and opens the chat only when you
-tap a Dude or a running session. The dashboard only aggregates; it never changes the node you are
-working with just to load data.
-
-No need to choose a computer first, and one offline machine does not hide the others.
-
-### Swipe from the left edge to open your sessions
-
-On any screen, swipe right from the left edge to open the side menu. It is organized by product,
-node, and session:
+On any screen, swipe right from the left edge to open the drawer. It is organized in three levels:
 
 ```text
 Product
@@ -61,112 +42,95 @@ Product
         └── Session
 ```
 
-- Tron Harness splits sessions into Topics, Directories, and Chats. Other products have a single
-  session list.
-- Multiple computers under one product are listed together; you do not choose one in advance.
-- Sessions load on demand and stay in memory. Reopening the menu refreshes them; switching nodes
-  or going offline clears them.
-- Pairing by QR and Settings stay in the top-right corner of the menu.
+- Tron Harness is grouped by topic, directory, and quick chat; other products use a single session list.
+- Multiple computers under the same product are listed together.
+- Sessions load on demand and live only in memory; they are cleared when you switch nodes or go offline.
 
-### Replies that appear as they are written
+## Replies appear as they are written
 
-Chat replies stream in as they are generated. When the current environment cannot read a stream,
-the app falls back to a regular request and polls for the result, and the screen tells you which
-mode is active. The input supports multiple lines, with clear feedback for sending, retry, and
-offline states.
+Chat uses streaming, so a reply appears while it is still being generated. The composer supports multiple lines, and send, retry, and offline states all have clear feedback.
 
-The interface uses native components rather than a web wrapper, so long lists and the keyboard
-behave like a system app.
+The UI is built with native components, so long lists and the keyboard feel closer to a system app.
 
-### Secure by default
+## Works at home and away
 
-| Data | Stored in | Kept until |
+- **At home**: the app automatically uses the local network, which is the fastest path.
+- **Away**: connect through an HTTPS entry point you host yourself. Your computer does not need a public IP, and you never switch nodes by hand.
+- **Switching**: the app re-evaluates available addresses when the network changes and only marks a node offline after every candidate fails.
+- **Privacy**: the public path uses TLS, with an additional application-layer encryption inside it. Chat history stays in phone memory only.
+
+See [Self-hosted public tunnel](docs/self-hosted-tunnel.en.md) for FRP, Cloudflare Tunnel, Tailscale, and reverse-proxy setup. See [Remote access internals](docs/remote-access.en.md) for the protocol and implementation.
+
+## Security and privacy
+
+| Data | Stored in | Retained until |
 | --- | --- | --- |
-| Pairing credentials | Secure storage on the phone, per computer | The node is removed or paired again |
-| Access token | Memory only | Expires, or is cleared when you switch nodes, background the app, or go offline |
+| Device key | Phone secure storage, one per computer | The node is removed or re-paired |
 | Sessions and messages | Memory only | The app exits |
-| Products, nodes, and preferences | Local storage on the phone | Persisted |
+| Products, nodes, UI preferences | Local phone storage | Indefinitely |
 
-- Remote connections require HTTPS by default. A node that uses `http://` must be marked for
-  insecure debugging and confirmed again; otherwise the app sends no request at all.
-- When an access token expires, the app fetches a new one once. If that fails, it asks you to pair
-  again.
-- A lost phone holds no reusable access credentials and no readable chat history.
+- If the phone is lost, the computer can revoke that device remotely.
+- The public entry point is controlled by you; traffic does not pass through a Person-AI relay service.
+- Switching nodes, going to the background, or going offline clears in-memory conversation content.
 
-### Designed for the phone
+## Designed for the phone
 
-Four accent themes, light, dark, and system appearance, and a Simplified Chinese or English
-interface. Themes belong to the phone and never follow a computer's skin. Language changes apply
-immediately and are saved on the device.
+Four accent colors, light/dark/system themes, and a UI available in Simplified Chinese, English, and Japanese. Themes belong to the phone and never follow a computer's skin. Language changes apply immediately and are saved locally.
 
 <p align="center">
-  <img src="docs/screenshots/settings.png" width="230" alt="Theme, language, and product settings">
+  <img src="docs/screenshots/settings.png" width="230" alt="Settings: theme, language and product definitions">
   <img src="docs/screenshots/dashboard-light.png" width="230" alt="Dashboard in light mode">
 </p>
-<p align="center"><sub>Themes, language, and product definitions · light mode (Chinese UI, demo data)</sub></p>
+<p align="center"><sub>Theme, language and product definitions · light mode (Chinese UI, demo data)</sub></p>
 
-### Built-in products, plus your own
+## Multiple products, plus your own
 
-Built-in products work out of the box, and you can add your own product code in Settings. Pair a
-node by scanning its QR code or entering the details by hand. The app trusts the product identity
-reported by the node; if it differs from the current product, the node is moved to the right
-product and you are told.
+Built-in products work out of the box, and you can add your own product codes in Settings. Pair a node by scanning a QR code or pasting a pairing link.
 
-| Product | Code | On the phone |
+| Product | Code | Mobile capabilities |
 | --- | --- | --- |
-| Tron Harness | `tron` | Topics, directories, and chats; Dudes; workspaces; streaming sessions |
-| 运维智能体 (Ops Agent) | `axiom-agent` | Sessions, workspaces, and Dude summaries |
-| 小说智能体 (Novel Agent) | `novel-agent` | Sessions, workspaces, and Dude summaries |
-| GitDeck | `git-deck` | Sessions, workspaces, and Dude summaries |
-| Custom product | Lowercase letters, digits, `.` or `-` | One session list; add or remove at any time |
-
-Built-in products cannot be removed. Removing a custom product also removes its nodes and pairing
-credentials.
-
-## Who it is for
-
-- People who run different AI services on several computers or home servers and want one place to
-  manage them.
-- People who leave their desk but still want to check on work and continue a conversation.
-- People who care about data boundaries and do not want chat history going through a third-party
-  cloud.
-- Teams extending the Person-AI protocol with their own mobile entry point.
+| Tron Harness | `tron` | Topic/directory/quick-chat groups, Dudes, workspaces, streaming sessions |
+| Axiom Agent | `axiom-agent` | Sessions, workspaces, Dude summaries |
+| Novel Agent | `novel-agent` | Sessions, workspaces, Dude summaries |
+| GitDeck | `git-deck` | Sessions, workspaces, Dude summaries |
+| Custom product | lowercase letters, digits, `.` or `-` | Single-level session list, addable and removable |
 
 ## Getting started
 
-PersonAI Mobile is in early preview; installers and store distribution are still in progress. To
-try it:
+The project is still in early preview; installers and store distribution are still being finalized.
 
-1. Start a Person-AI service on your computer and enable remote access.
-2. Install PersonAI Mobile on your phone. Only development builds are available for now.
-3. Tap the scan icon in the top-right corner of the side menu and scan the QR code on your
-   computer. You can also enter the address and pairing token by hand.
+1. Start the Person-AI service on your computer and enable remote access.
+2. Install PersonAI Mobile. Only development builds are available right now.
+3. Open the scan entry in the top-right corner of the drawer and scan the QR code on the computer, or paste the pairing link manually.
 
-See the [developer guide](DEVELOPMENT.en.md) for installation, builds, and local development.
+At home on the same Wi-Fi, the app connects directly. Away from home, it switches to your public entry point automatically when one is configured.
 
 ## Known limitations
 
-- Early preview: physical-device validation and store distribution are not complete.
-- The session tree reads only the first active workspace on each computer.
-- Messages are plain text. Markdown and attachments are not supported yet.
-- Insecure debugging cannot be turned off on its own; remove the node and pair it again.
-- The web preview is for debugging only, not a supported production environment.
+- Early preview: device testing and store distribution are not finished.
+- The session tree reads only the first active workspace of each computer.
+- Messages are plain text; Markdown and attachments are not rendered yet.
+- Public access requires you to configure a tunnel; no relay service is provided by default.
+- The web preview is for debugging only, not for production use.
+
+## Documentation
+
+- [Remote access internals](docs/remote-access.en.md): protocol, encryption, RPC, and endpoint selection.
+- [Self-hosted public tunnel](docs/self-hosted-tunnel.en.md): FRP, Cloudflare Tunnel, Tailscale, Caddy/Nginx.
+- [Development](DEVELOPMENT.en.md) · [AGENTS.md](AGENTS.md)
 
 ## Contributing
 
-Issues and pull requests are welcome. Read the [developer guide](DEVELOPMENT.en.md) and
-[AGENTS.md](AGENTS.md) before you start. Changes to networking, session storage, or navigation
-gestures should explain the security boundary and how you verified it in the PR.
+Issues and pull requests are welcome. For changes involving networking, session persistence, or navigation gestures, explain the security boundary and how you verified it.
 
-If this project is useful to you, a star helps others find it.
+If this project is useful to you, a Star is appreciated.
 
 ## License
 
 [GNU Affero General Public License v3.0](LICENSE) © Person-AI
 
-PersonAI Mobile is free software: you can use, modify, and distribute it. If you provide it as a
-network service, the AGPL requires you to publish the corresponding source code.
+PersonAI Mobile is free software: you may use, modify, and redistribute it. If you provide it as a network service, you must publish the corresponding source under AGPL.
 
 ---
 
-[Developer guide](DEVELOPMENT.en.md) · [简体中文](README.md) · [日本語](README.ja.md) · [AGPL-3.0](LICENSE)
+[Development](DEVELOPMENT.en.md) · [简体中文](README.md) · [日本語](README.ja.md) · [AGPL-3.0](LICENSE)
