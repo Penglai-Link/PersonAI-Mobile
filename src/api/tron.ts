@@ -36,7 +36,17 @@ export const TRON_RPC_METHODS = {
   projectsList: "tron.projects.list",
   directoriesList: "tron.directories.list",
   sessionGroups: "tron.session.groups",
+  navigationMenus: "tron.navigation.menus",
 } as const;
+
+/** A chat sidebar widget defined by the product's navigation menu. */
+export interface NavigationMenu {
+  menuCode: string;
+  label: string;
+  /** `chat.projects`, `chat.directories`, `chat.recents`, ... */
+  pageCode: string;
+  icon: string | null;
+}
 
 export interface SkinResources {
   background?: string | null;
@@ -380,6 +390,36 @@ async function callTron<T>(
   });
 }
 
+/**
+ * `tron.navigation.menus` — the product's chat sidebar widgets. The client
+ * renders these labels in order instead of hard-coding section names.
+ */
+export async function listNavigationMenus(
+  params: ApiParams,
+): Promise<NavigationMenu[]> {
+  const data = await callTron<unknown>(
+    params,
+    TRON_RPC_METHODS.navigationMenus,
+    workspaceParam(params.workspaceCode),
+  );
+  if (!Array.isArray(data)) return [];
+  return data
+    .map((entry): NavigationMenu | null => {
+      if (!isRecord(entry)) return null;
+      const menuCode = readString(entry, "menuCode");
+      const label = readString(entry, "label");
+      const pageCode = readString(entry, "pageCode");
+      if (!label || !pageCode) return null;
+      return {
+        menuCode: menuCode ?? pageCode,
+        label,
+        pageCode,
+        icon: readString(entry, "icon"),
+      };
+    })
+    .filter((menu): menu is NavigationMenu => menu !== null);
+}
+
 /** `tron.skins.list` — read-only skins installed on the node. */
 export async function listSkins(
   params: ApiParams & { timeoutMs?: number },
@@ -528,7 +568,11 @@ export async function listChatMessages(
 ): Promise<ChatMessage[]> {
   const rpc = new SessionRpc(params.tunnel);
   const result = await rpc.history(
-    { sessionId: params.sessionCode, limit: 200 },
+    {
+      sessionId: params.sessionCode,
+      limit: 200,
+      metadata: params.dudeCode ? { dudeCode: params.dudeCode } : undefined,
+    },
     { signal: params.signal, timeoutMs: 20_000 },
   );
   const source = isRecord(result) ? result.messages : result;
@@ -541,7 +585,11 @@ export async function stopChatRun(
 ): Promise<boolean> {
   const rpc = new SessionRpc(params.tunnel);
   const result = await rpc.stopRun(
-    { sessionId: params.sessionCode, runId: params.runId ?? null },
+    {
+      sessionId: params.sessionCode,
+      runId: params.runId ?? null,
+      metadata: params.dudeCode ? { dudeCode: params.dudeCode } : undefined,
+    },
     { signal: params.signal, timeoutMs: 15_000 },
   );
   return result?.cancelled === true;

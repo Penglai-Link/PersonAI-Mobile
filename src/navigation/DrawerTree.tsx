@@ -10,8 +10,7 @@ import {
 import {
   TRON_PRODUCT_CODE,
   type ChatSession,
-  type DirectoryRecord,
-  type ProjectRecord,
+  type NavigationMenu,
 } from "../api/tron";
 import { StatusDot } from "../components/StatusDot";
 import { Ionicons } from "../components/icons";
@@ -32,7 +31,10 @@ import {
   formatRelativeTime,
   parseTimestamp,
 } from "../utils/format";
-import { loadNodeOverview } from "../utils/nodeOverview";
+import {
+  loadNodeOverview,
+  type NodeOverview,
+} from "../utils/nodeOverview";
 
 interface DrawerTreeProps {
   /** Refresh expanded nodes whenever the drawer is opened. */
@@ -50,15 +52,34 @@ interface TreeSession {
   workspaceCode: string;
 }
 
-interface TreeGroup {
-  key: "topics" | "directories" | "chats" | "sessions";
+/** A dynamically defined chat section from the product navigation menu. */
+interface TreeMenuGroup {
+  key: string;
+  label: string;
+  /** `chat.projects`, `chat.directories`, `chat.recents`, or `sessions`. */
+  pageCode: string;
+  unsupported?: boolean;
   sessions: TreeSession[];
+  subgroups: TreeSubgroup[];
+}
+
+interface TreeSubgroup {
+  key: string;
+  label: string;
+  sessions: TreeSession[];
+}
+
+interface TreeWorkspace {
+  workspaceCode: string;
+  label: string;
+  name: string;
+  groups: TreeMenuGroup[];
 }
 
 type NodeTreeState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; groups: TreeGroup[] };
+  | { status: "ready"; workspaces: TreeWorkspace[] };
 
 function sortByUpdatedDesc(left: TreeSession, right: TreeSession): number {
   return (
@@ -67,80 +88,112 @@ function sortByUpdatedDesc(left: TreeSession, right: TreeSession): number {
   );
 }
 
-function buildTreeGroups(
-  node: SavedNode,
-  sessions: ChatSession[],
-  projects: ProjectRecord[],
-  directories: DirectoryRecord[],
-  workspaceCode: string,
-): TreeGroup[] {
-  const allSessions: TreeSession[] = sessions.map((session) => ({
-    session,
-    workspaceCode,
-  }));
+function isManualSession(session: ChatSession): boolean {
+  return (session.sourceType ?? "").toUpperCase() === "MANUAL";
+}
 
+function buildMenuGroups(
+  node: SavedNode,
+  workspace: NodeOverview["workspaces"][number],
+  menus: NavigationMenu[],
+): TreeMenuGroup[] {
+  const allSessions: TreeSession[] = workspace.sessions.map((session) => ({
+    session,
+    workspaceCode: session.workspaceCode ?? workspace.workspaceCode,
+  }));
+  const manualSessions = allSessions.filter((item) =>
+    isManualSession(item.session),
+  );
+
+  // Other products do not expose sidebar widgets; keep their single flat list.
   if (node.productCode !== TRON_PRODUCT_CODE) {
     if (!allSessions.length) return [];
     return [
       {
         key: "sessions",
-        sessions: allSessions.sort(sortByUpdatedDesc),
+        label: "",
+        pageCode: "sessions",
+        sessions: [...allSessions].sort(sortByUpdatedDesc),
+        subgroups: [],
       },
     ];
   }
 
-  const projectNames = new Map(
-    projects.map((project) => [project.projectCode, project.name]),
-  );
-  const directoryNames = new Map(
-    directories.map((directory) => [
-      directory.directoryCode,
-      directory.name || directory.path,
-    ]),
-  );
-
-  const topics: TreeSession[] = [];
-  const directorySessions: TreeSession[] = [];
-  const chats: TreeSession[] = [];
-
-  for (const item of allSessions) {
-    const { session } = item;
-    if (session.projectCode) {
-      topics.push({
-        ...item,
-        detail:
-          projectNames.get(session.projectCode) ?? session.projectCode,
-      });
-    } else if (session.directoryCode) {
-      directorySessions.push({
-        ...item,
-        detail:
-          directoryNames.get(session.directoryCode) ?? session.directoryCode,
-      });
-    } else {
-      chats.push(item);
+  return menus.map((menu): TreeMenuGroup => {
+    const key = menu.menuCode || menu.pageCode;
+    if (menu.pageCode === "chat.projects") {
+      const subgroups = workspace.projects.map((project) => ({
+        key: `project:${project.projectCode}`,
+        label: project.name || project.projectCode,
+        sessions: manualSessions
+          .filter(
+            (item) => item.session.projectCode === project.projectCode,
+          )
+          .sort(sortByUpdatedDesc),
+      }));
+      return {
+        key,
+        label: menu.label,
+        pageCode: menu.pageCode,
+        sessions: [],
+        subgroups,
+      };
     }
-  }
-
-  const groups: TreeGroup[] = [
-    {
-      key: "topics",
-      sessions: topics.sort(sortByUpdatedDesc),
-    },
-    {
-      key: "directories",
-      sessions: directorySessions.sort(sortByUpdatedDesc),
-    },
-    {
-      key: "chats",
-      sessions: chats.sort(sortByUpdatedDesc),
-    },
-  ];
-  return groups.filter((group) => group.sessions.length > 0);
+    if (menu.pageCode === "chat.directories") {
+      const subgroups = workspace.directories.map((directory) => ({
+        key: `directory:${directory.directoryCode}`,
+        label: directory.name || directory.path || directory.directoryCode,
+        sessions: manualSessions
+          .filter(
+            (item) => item.session.directoryCode === directory.directoryCode,
+          )
+          .sort(sortByUpdatedDesc),
+      }));
+      return {
+        key,
+        label: menu.label,
+        pageCode: menu.pageCode,
+        sessions: [],
+        subgroups,
+      };
+    }
+    if (menu.pageCode === "chat.recents") {
+      const sessions = manualSessions
+        .filter(
+          (item) =>
+            !item.session.projectCode && !item.session.directoryCode,
+        )
+        .sort(sortByUpdatedDesc);
+      return {
+        key,
+        label: menu.label,
+        pageCode: menu.pageCode,
+        sessions,
+        subgroups: [],
+      };
+    }
+    return {
+      key,
+      label: menu.label,
+      pageCode: menu.pageCode,
+      unsupported: true,
+      sessions: [],
+      subgroups: [],
+    };
+  });
 }
 
-function workspaceStatusActive(status: string): boolean {
-  return status?.toUpperCase() === "ACTIVE";
+function buildNodeWorkspaces(
+  node: SavedNode,
+  overview: NodeOverview,
+  menus: NavigationMenu[],
+): TreeWorkspace[] {
+  return overview.workspaces.map((workspace) => ({
+    workspaceCode: workspace.workspaceCode,
+    label: workspace.label || workspace.name || workspace.workspaceCode,
+    name: workspace.name || workspace.workspaceCode,
+    groups: buildMenuGroups(node, workspace, menus),
+  }));
 }
 
 export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
@@ -156,6 +209,9 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
   const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>(
     {},
   );
+  const [expandedWorkspaces, setExpandedWorkspaces] = useState<
+    Record<string, boolean>
+  >({});
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(
     {},
   );
@@ -169,6 +225,7 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
   useEffect(() => {
     if (contentEpoch === 0) return;
     setNodeStates({});
+    setExpandedWorkspaces({});
     setExpandedGroups({});
   }, [contentEpoch]);
 
@@ -183,12 +240,29 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
     [nodes, products],
   );
 
-  const groupLabel = (key: TreeGroup["key"]) => {
-    if (key === "topics") return t("主题", "topics");
-    if (key === "directories") return t("目录");
-    if (key === "chats") return t("随聊");
-    return t("会话");
-  };
+  const fallbackMenus = useMemo<NavigationMenu[]>(
+    () => [
+      {
+        menuCode: "CHAT_PROJECTS",
+        label: t("主题", "topics"),
+        pageCode: "chat.projects",
+        icon: null,
+      },
+      {
+        menuCode: "CHAT_DIRECTORIES",
+        label: t("工作区"),
+        pageCode: "chat.directories",
+        icon: null,
+      },
+      {
+        menuCode: "CHAT_RECENTS",
+        label: t("随聊"),
+        pageCode: "chat.recents",
+        icon: null,
+      },
+    ],
+    [t],
+  );
 
   const loadNode = useCallback(
     async (node: SavedNode) => {
@@ -197,18 +271,15 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
         [node.id]: { status: "loading" },
       }));
       try {
-        const overview = await loadNodeOverview(node, requestForNode);
+        const overview = await loadNodeOverview(node, requestForNode, {
+          includeCatalog: node.productCode === TRON_PRODUCT_CODE,
+        });
+        const menus = overview.menus.length ? overview.menus : fallbackMenus;
         setNodeStates((previous) => ({
           ...previous,
           [node.id]: {
             status: "ready",
-            groups: buildTreeGroups(
-              node,
-              overview.sessions,
-              overview.projects,
-              overview.directories,
-              overview.workspaceCode ?? "",
-            ),
+            workspaces: buildNodeWorkspaces(node, overview, menus),
           },
         }));
       } catch (error) {
@@ -221,7 +292,7 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
         }));
       }
     },
-    [requestForNode],
+    [fallbackMenus, requestForNode],
   );
 
   useEffect(() => {
@@ -255,10 +326,26 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
     }
   };
 
+  const toggleWorkspace = (workspaceId: string) => {
+    setExpandedWorkspaces((previous) => {
+      // Workspaces start expanded; only an explicit `false` closes them.
+      const open = previous[workspaceId] !== false;
+      return { ...previous, [workspaceId]: !open };
+    });
+  };
+
   const toggleGroup = (groupId: string) => {
     setExpandedGroups((previous) => ({
       ...previous,
       [groupId]: !previous[groupId],
+    }));
+  };
+
+  // Menu sections start expanded, so an unset key counts as open.
+  const toggleMenuGroup = (groupId: string) => {
+    setExpandedGroups((previous) => ({
+      ...previous,
+      [groupId]: previous[groupId] === false,
     }));
   };
 
@@ -309,11 +396,6 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
             ? productNodes.map((node) => {
                 const nodeOpen = Boolean(expandedNodes[node.id]);
                 const state = nodeStates[node.id];
-                const flat =
-                  product.code !== TRON_PRODUCT_CODE &&
-                  state?.status === "ready" &&
-                  state.groups.length === 1 &&
-                  state.groups[0]?.key === "sessions";
 
                 const renderSession = (item: TreeSession) => (
                   <Pressable
@@ -348,6 +430,214 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
                     </View>
                   </Pressable>
                 );
+
+                const renderSubgroup = (
+                  workspace: TreeWorkspace,
+                  group: TreeMenuGroup,
+                  subgroup: TreeSubgroup,
+                ) => {
+                  const subgroupId = `${node.id}:${workspace.workspaceCode}:${group.key}:${subgroup.key}`;
+                  const open = expandedGroups[subgroupId] === true;
+                  return (
+                    <View key={subgroup.key}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityState={{ expanded: open }}
+                        accessibilityLabel={format(
+                          open
+                            ? "收起分组 {name}"
+                            : "展开分组 {name}",
+                          { name: subgroup.label },
+                        )}
+                        onPress={() => toggleGroup(subgroupId)}
+                        style={({ pressed }) => [
+                          styles.subgroupRow,
+                          pressed && styles.pressed,
+                        ]}
+                      >
+                        <Ionicons
+                          name={
+                            group.pageCode === "chat.directories"
+                              ? "folder-outline"
+                              : "albums-outline"
+                          }
+                          size={12}
+                          color={palette.muted}
+                        />
+                        <Text
+                          style={styles.subgroupLabel}
+                          numberOfLines={1}
+                        >
+                          {subgroup.label}
+                        </Text>
+                        <Text style={styles.groupCount}>
+                          {subgroup.sessions.length}
+                        </Text>
+                        <Ionicons
+                          name={open ? "chevron-down" : "chevron-forward"}
+                          size={11}
+                          color={palette.muted}
+                        />
+                      </Pressable>
+                      {open ? (
+                        <View style={styles.sessionList}>
+                          {subgroup.sessions.map(renderSession)}
+                        </View>
+                      ) : null}
+                    </View>
+                  );
+                };
+
+                const renderMenuGroup = (
+                  workspace: TreeWorkspace,
+                  group: TreeMenuGroup,
+                ) => {
+                  // Non-menu products keep a plain session list.
+                  if (group.pageCode === "sessions") {
+                    return (
+                      <View key={group.key} style={styles.sessionList}>
+                        {group.sessions.map(renderSession)}
+                      </View>
+                    );
+                  }
+                  const menuId = `${node.id}:${workspace.workspaceCode}:${group.key}`;
+                  const open = expandedGroups[menuId] !== false;
+                  const count =
+                    group.sessions.length +
+                    group.subgroups.reduce(
+                      (total, subgroup) => total + subgroup.sessions.length,
+                      0,
+                    );
+                  return (
+                    <View key={group.key}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityState={{ expanded: open }}
+                        accessibilityLabel={format(
+                          open
+                            ? "收起分组 {name}"
+                            : "展开分组 {name}",
+                          { name: group.label },
+                        )}
+                        onPress={() => toggleMenuGroup(menuId)}
+                        style={({ pressed }) => [
+                          styles.groupRow,
+                          pressed && styles.pressed,
+                        ]}
+                      >
+                        <Ionicons
+                          name={
+                            group.pageCode === "chat.projects"
+                              ? "albums-outline"
+                              : group.pageCode === "chat.directories"
+                                ? "folder-outline"
+                                : group.pageCode === "chat.recents"
+                                  ? "chatbubbles-outline"
+                                  : "apps-outline"
+                          }
+                          size={14}
+                          color={palette.muted}
+                        />
+                        <Text style={styles.groupLabel}>{group.label}</Text>
+                        <Text style={styles.groupCount}>{count}</Text>
+                        <Ionicons
+                          name={open ? "chevron-down" : "chevron-forward"}
+                          size={12}
+                          color={palette.muted}
+                        />
+                      </Pressable>
+                      {open ? (
+                        <View style={styles.menuBody}>
+                          {group.unsupported ? (
+                            <Text style={styles.hint}>
+                              {t("手机暂不支持这个分组。")}
+                            </Text>
+                          ) : group.subgroups.length ? (
+                            group.subgroups.map((subgroup) =>
+                              renderSubgroup(workspace, group, subgroup),
+                            )
+                          ) : group.sessions.length ? (
+                            <View style={styles.sessionList}>
+                              {group.sessions.map(renderSession)}
+                            </View>
+                          ) : (
+                            <Text style={styles.hint}>{t("没有会话")}</Text>
+                          )}
+                        </View>
+                      ) : null}
+                    </View>
+                  );
+                };
+
+                const renderWorkspace = (workspace: TreeWorkspace) => {
+                  const workspaceId = `${node.id}:${workspace.workspaceCode}`;
+                  const workspaceOpen =
+                    expandedWorkspaces[workspaceId] !== false;
+                  const sessionCount = workspace.groups.reduce(
+                    (total, group) =>
+                      total +
+                      group.sessions.length +
+                      group.subgroups.reduce(
+                        (sum, subgroup) => sum + subgroup.sessions.length,
+                        0,
+                      ),
+                    0,
+                  );
+
+                  return (
+                    <View key={workspace.workspaceCode}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityState={{ expanded: workspaceOpen }}
+                        accessibilityLabel={format(
+                          workspaceOpen
+                            ? "收起工作空间 {name}"
+                            : "展开工作空间 {name}",
+                          { name: workspace.label },
+                        )}
+                        onPress={() => toggleWorkspace(workspaceId)}
+                        style={({ pressed }) => [
+                          styles.workspaceRow,
+                          pressed && styles.pressed,
+                        ]}
+                      >
+                        <Ionicons
+                          name="layers-outline"
+                          size={13}
+                          color={palette.accent}
+                        />
+                        <Text
+                          style={styles.workspaceLabel}
+                          numberOfLines={1}
+                        >
+                          {workspace.label}
+                        </Text>
+                        <Text style={styles.workspaceCount}>
+                          {sessionCount}
+                        </Text>
+                        <Ionicons
+                          name={
+                            workspaceOpen ? "chevron-down" : "chevron-forward"
+                          }
+                          size={12}
+                          color={palette.muted}
+                        />
+                      </Pressable>
+
+                      {workspaceOpen ? (
+                        <View style={styles.workspaceBody}>
+                          {workspace.groups.length === 0 ? (
+                            <Text style={styles.hint}>{t("没有会话")}</Text>
+                          ) : (
+                            workspace.groups.map((group) =>
+                              renderMenuGroup(workspace, group),
+                            )
+                          )}
+                        </View>
+                      ) : null}
+                    </View>
+                  );
+                };
 
                 return (
                   <View key={node.id}>
@@ -406,65 +696,12 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
                             </Pressable>
                           </View>
                         ) : state?.status === "ready" &&
-                          state.groups.length === 0 ? (
-                          <Text style={styles.hint}>{t("没有会话")}</Text>
-                        ) : flat && state?.status === "ready" ? (
-                          <View style={styles.sessionList}>
-                            {state.groups[0]!.sessions.map(renderSession)}
-                          </View>
+                          state.workspaces.length === 0 ? (
+                          <Text style={styles.hint}>
+                            {t("这台电脑还没有可用的工作空间。")}
+                          </Text>
                         ) : state?.status === "ready" ? (
-                          state.groups.map((group) => {
-                            const groupId = `${node.id}:${group.key}`;
-                            const groupOpen =
-                              expandedGroups[groupId] === true;
-                            return (
-                              <View key={group.key}>
-                                <Pressable
-                                  accessibilityRole="button"
-                                  accessibilityState={{
-                                    expanded: groupOpen,
-                                  }}
-                                  onPress={() => toggleGroup(groupId)}
-                                  style={({ pressed }) => [
-                                    styles.groupRow,
-                                    pressed && styles.pressed,
-                                  ]}
-                                >
-                                  <Ionicons
-                                    name={
-                                      group.key === "topics"
-                                        ? "albums-outline"
-                                        : group.key === "directories"
-                                          ? "folder-outline"
-                                          : "chatbubbles-outline"
-                                    }
-                                    size={14}
-                                    color={palette.muted}
-                                  />
-                                  <Text style={styles.groupLabel}>
-                                    {groupLabel(group.key)}
-                                  </Text>
-                                  <Text style={styles.groupCount}>
-                                    {group.sessions.length}
-                                  </Text>
-                                  <Ionicons
-                                    name={
-                                      groupOpen
-                                        ? "chevron-down"
-                                        : "chevron-forward"
-                                    }
-                                    size={12}
-                                    color={palette.muted}
-                                  />
-                                </Pressable>
-                                {groupOpen ? (
-                                  <View style={styles.sessionList}>
-                                    {group.sessions.map(renderSession)}
-                                  </View>
-                                ) : null}
-                              </View>
-                            );
-                          })
+                          state.workspaces.map(renderWorkspace)
                         ) : null}
                       </View>
                     ) : null}
@@ -543,6 +780,29 @@ const createStyles = (c: Palette) =>
       paddingBottom: spacing.sm,
       gap: 2,
     },
+    workspaceRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.sm,
+      minHeight: 32,
+      paddingHorizontal: spacing.sm,
+      borderRadius: 8,
+    },
+    workspaceLabel: {
+      flex: 1,
+      color: c.text,
+      ...typography.bodyStrong,
+      fontSize: 11,
+    },
+    workspaceCount: {
+      color: c.muted,
+      ...typography.caption,
+      fontSize: 10,
+    },
+    workspaceBody: {
+      paddingLeft: spacing.xs,
+      gap: 1,
+    },
     hint: {
       color: c.muted,
       ...typography.caption,
@@ -571,6 +831,24 @@ const createStyles = (c: Palette) =>
       minHeight: 34,
       paddingHorizontal: spacing.sm,
       borderRadius: 8,
+    },
+    menuBody: {
+      paddingLeft: spacing.md,
+      gap: 1,
+    },
+    subgroupRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.sm,
+      minHeight: 32,
+      paddingHorizontal: spacing.sm,
+      borderRadius: 8,
+    },
+    subgroupLabel: {
+      flex: 1,
+      color: c.text,
+      ...typography.body,
+      fontSize: 11,
     },
     groupLabel: {
       flex: 1,

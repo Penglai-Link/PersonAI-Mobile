@@ -16,13 +16,17 @@ import {
   createChatSession,
   createDudeSession,
   createMainDudeSession,
+  listDirectories,
   listDudes,
+  listNavigationMenus,
   listProjects,
   listSessionGroups,
   listWorkspaceOptions,
   type ChatSession,
   type ChatSessionGroup,
+  type DirectoryRecord,
   type Dude,
+  type NavigationMenu,
   type ProjectRecord,
   type WorkspaceOption,
 } from "../api/tron";
@@ -55,7 +59,6 @@ import {
 import { describeError, formatRelativeTime, parseTimestamp } from "../utils/format";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Home">;
-type HomeTab = "recent" | "themes";
 
 const workspaceStatusActive = (status: string) =>
   status?.toUpperCase() === "ACTIVE";
@@ -91,11 +94,17 @@ export function HomeScreen({ navigation }: Props) {
     null,
   );
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
+  const [directories, setDirectories] = useState<DirectoryRecord[]>([]);
   const [groups, setGroups] = useState<ChatSessionGroup[]>([]);
-  const [tab, setTab] = useState<HomeTab>("recent");
+  const [menus, setMenus] = useState<NavigationMenu[]>([]);
+  /** `pageCode` of the selected product menu, e.g. `chat.directories`. */
+  const [tab, setTab] = useState<string | null>(null);
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>(
     {},
   );
+  const [expandedDirectories, setExpandedDirectories] = useState<
+    Record<string, boolean>
+  >({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [contentLoading, setContentLoading] = useState(false);
@@ -137,20 +146,33 @@ export function HomeScreen({ navigation }: Props) {
         ? selectedWorkspaceRef.current
         : (activeWorkspaces[0]?.workspaceCode ?? null);
 
-    const nextDudes = await sessionRequest(({ tunnel }) =>
-      listDudes({
-        tunnel,
-        workspaceCode: candidate ?? undefined,
-      }),
-    );
+    // Workspace availability is what makes the create button usable, so it is
+    // committed before loading Dudes. A Dude failure must not hide the
+    // workspaces or leave the screen without a default selection.
+    if (sequence !== overviewSeqRef.current) {
+      return selectedWorkspaceRef.current;
+    }
+    setWorkspaces(nextWorkspaces);
+    selectedWorkspaceRef.current = candidate;
+    setSelectedWorkspaceCode(candidate);
+
+    const [nextDudes, nextMenus] = await Promise.all([
+      sessionRequest(({ tunnel }) =>
+        listDudes({
+          tunnel,
+          workspaceCode: candidate ?? undefined,
+        }),
+      ).catch(() => []),
+      sessionRequest(({ tunnel }) => listNavigationMenus({ tunnel })).catch(
+        () => [] as NavigationMenu[],
+      ),
+    ]);
     if (sequence !== overviewSeqRef.current) {
       return selectedWorkspaceRef.current;
     }
 
     setDudes(nextDudes);
-    setWorkspaces(nextWorkspaces);
-    selectedWorkspaceRef.current = candidate;
-    setSelectedWorkspaceCode(candidate);
+    setMenus(nextMenus);
     return candidate;
   }, [computerId, sessionRequest]);
 
@@ -159,13 +181,16 @@ export function HomeScreen({ navigation }: Props) {
       const sequence = ++contentSeqRef.current;
       if (clearFirst) {
         setProjects([]);
+        setDirectories([]);
         setGroups([]);
       }
-      const [nextProjects, nextGroups] = await sessionRequest(({ tunnel }) =>
-        Promise.all([
-          listProjects({ tunnel, workspaceCode }),
-          listSessionGroups({ tunnel, workspaceCode }),
-        ]),
+      const [nextProjects, nextDirectories, nextGroups] = await sessionRequest(
+        ({ tunnel }) =>
+          Promise.all([
+            listProjects({ tunnel, workspaceCode }),
+            listDirectories({ tunnel, workspaceCode }),
+            listSessionGroups({ tunnel, workspaceCode }),
+          ]),
       );
       if (sequence !== contentSeqRef.current) return;
       setProjects(
@@ -175,6 +200,7 @@ export function HomeScreen({ navigation }: Props) {
             (parseTimestamp(left.updatedAt)?.getTime() ?? 0),
         ),
       );
+      setDirectories(nextDirectories);
       setGroups(nextGroups);
     },
     [sessionRequest],
@@ -209,6 +235,7 @@ export function HomeScreen({ navigation }: Props) {
         }
       } else {
         setProjects([]);
+        setDirectories([]);
         setGroups([]);
       }
       setLoading(false);
@@ -226,8 +253,12 @@ export function HomeScreen({ navigation }: Props) {
     setWorkspaces([]);
     setSelectedWorkspaceCode(null);
     setProjects([]);
+    setDirectories([]);
     setGroups([]);
+    setMenus([]);
+    setTab(null);
     setExpandedProjects({});
+    setExpandedDirectories({});
     setContentLoading(false);
     setRefreshing(false);
     setError(null);
@@ -262,6 +293,39 @@ export function HomeScreen({ navigation }: Props) {
       };
     }, [refreshAll, sessionStatus]),
   );
+
+  // Chat sections are product navigation widgets. Older nodes do not expose
+  // them yet, so fall back to Tron's canonical labels until they do.
+  const chatMenus = useMemo<NavigationMenu[]>(() => {
+    if (menus.length) return menus;
+    return [
+      {
+        menuCode: "CHAT_PROJECTS",
+        label: t("主题", "topics"),
+        pageCode: "chat.projects",
+        icon: null,
+      },
+      {
+        menuCode: "CHAT_DIRECTORIES",
+        label: t("工作区"),
+        pageCode: "chat.directories",
+        icon: null,
+      },
+      {
+        menuCode: "CHAT_RECENTS",
+        label: t("随聊"),
+        pageCode: "chat.recents",
+        icon: null,
+      },
+    ];
+  }, [menus, t]);
+
+  useEffect(() => {
+    if (!chatMenus.length) return;
+    if (!tab || !chatMenus.some((menu) => menu.pageCode === tab)) {
+      setTab(chatMenus[0].pageCode);
+    }
+  }, [chatMenus, tab]);
 
   const activeWorkspaces = useMemo(
     () => workspaces.filter((workspace) => workspaceStatusActive(workspace.status)),
@@ -316,12 +380,30 @@ export function HomeScreen({ navigation }: Props) {
     return result;
   }, [allSessions, projects]);
 
+  const sessionsByDirectory = useMemo(() => {
+    const result = new Map<string, ChatSession[]>();
+    for (const directory of directories) {
+      result.set(
+        directory.directoryCode,
+        allSessions
+          .filter(
+            (session) =>
+              isManualSession(session) &&
+              session.directoryCode === directory.directoryCode,
+          )
+          .sort(sortByUpdatedDesc),
+      );
+    }
+    return result;
+  }, [allSessions, directories]);
+
   const selectWorkspace = useCallback(
     (workspaceCode: string) => {
       if (workspaceCode === selectedWorkspaceRef.current) return;
       selectedWorkspaceRef.current = workspaceCode;
       setSelectedWorkspaceCode(workspaceCode);
       setExpandedProjects({});
+      setExpandedDirectories({});
       setError(null);
       setContentLoading(true);
       void loadContent(workspaceCode, true)
@@ -338,7 +420,7 @@ export function HomeScreen({ navigation }: Props) {
       const workspaceCode =
         session.workspaceCode ?? selectedWorkspaceRef.current ?? "";
       if (!workspaceCode) {
-        setError(t("该会话缺少工作区信息，请刷新后重试"));
+        setError(t("该会话缺少工作空间信息，请刷新后重试"));
         return;
       }
       const isDudeSession =
@@ -366,7 +448,11 @@ export function HomeScreen({ navigation }: Props) {
       setOpeningDudeCode(dude.dudeCode);
       setError(null);
       try {
-        const workspaceCodeForDude = selectedWorkspaceRef.current ?? undefined;
+        const workspaceCodeForDude =
+          selectedWorkspaceRef.current ??
+          activeWorkspaces[0]?.workspaceCode ??
+          workspaces[0]?.workspaceCode ??
+          undefined;
         const session = dude.isMain
           ? await sessionRequest(({ tunnel }) =>
               createMainDudeSession({
@@ -382,9 +468,12 @@ export function HomeScreen({ navigation }: Props) {
               }),
             );
         const workspaceCode =
-          session.workspaceCode ?? selectedWorkspaceRef.current ?? null;
+          session.workspaceCode ??
+          selectedWorkspaceRef.current ??
+          workspaceCodeForDude ??
+          null;
         if (!workspaceCode) {
-          setError("这台电脑还没有可用工作区，无法打开 Dude 会话");
+          setError(t("这台电脑还没有可用工作空间，无法打开 Dude 会话"));
           return;
         }
         navigation.push("Chat", {
@@ -399,12 +488,35 @@ export function HomeScreen({ navigation }: Props) {
         setOpeningDudeCode(null);
       }
     },
-    [navigation, openingDudeCode, sessionRequest, sessionStatus],
+    [
+      activeWorkspaces,
+      navigation,
+      openingDudeCode,
+      sessionRequest,
+      sessionStatus,
+      t,
+      workspaces,
+    ],
   );
 
   const createChat = useCallback(async () => {
-    const workspaceCode = selectedWorkspaceRef.current;
-    if (!workspaceCode || creating || sessionStatus !== "online") return;
+    if (creating || sessionStatus !== "online") return;
+    // Resolve the workspace at press time. `selectedWorkspaceCode` can be
+    // briefly unset while a refresh is in flight; the loaded list is the
+    // source of truth, and an empty result must never be sent to the node.
+    const workspaceCode =
+      selectedWorkspaceRef.current ??
+      activeWorkspaces[0]?.workspaceCode ??
+      workspaces[0]?.workspaceCode ??
+      null;
+    if (!workspaceCode) {
+      setError(t("这台电脑还没有可用的工作空间，无法创建会话。"));
+      return;
+    }
+    if (selectedWorkspaceRef.current !== workspaceCode) {
+      selectedWorkspaceRef.current = workspaceCode;
+      setSelectedWorkspaceCode(workspaceCode);
+    }
     setCreating(true);
     setError(null);
     try {
@@ -422,14 +534,26 @@ export function HomeScreen({ navigation }: Props) {
     } finally {
       setCreating(false);
     }
-  }, [creating, navigation, sessionRequest, sessionStatus]);
+  }, [
+    activeWorkspaces,
+    creating,
+    navigation,
+    sessionRequest,
+    sessionStatus,
+    t,
+    workspaces,
+  ]);
 
   const refreshFromPull = useCallback(() => {
     void refreshAll(false, true);
   }, [refreshAll]);
 
   const canCreate =
-    Boolean(selectedWorkspaceCode) &&
+    Boolean(
+      selectedWorkspaceCode ??
+        activeWorkspaces[0]?.workspaceCode ??
+        workspaces[0]?.workspaceCode,
+    ) &&
     !creating &&
     !loading &&
     sessionStatus === "online";
@@ -503,10 +627,10 @@ export function HomeScreen({ navigation }: Props) {
 
   const renderWorkspaceSection = () => (
     <View style={styles.section}>
-      <SectionHeader title={t("工作区")} count={activeWorkspaces.length} />
+      <SectionHeader title={t("工作空间")} count={activeWorkspaces.length} />
       {activeWorkspaces.length === 0 ? (
         <Text style={styles.mutedText}>
-          {t("这台电脑还没有可用的工作区。")}
+          {t("这台电脑还没有可用的工作空间。")}
         </Text>
       ) : (
         <ScrollView
@@ -520,7 +644,7 @@ export function HomeScreen({ navigation }: Props) {
               <Pressable
                 key={workspace.workspaceCode}
                 accessibilityRole="button"
-                accessibilityLabel={format("切换到工作区 {name}", {
+                accessibilityLabel={format("切换到工作空间 {name}", {
                   name: workspace.name,
                 })}
                 accessibilityState={{ selected }}
@@ -551,15 +675,8 @@ export function HomeScreen({ navigation }: Props) {
     </View>
   );
 
-  const renderRecentSessions = () => (
+  const renderChats = () => (
     <View style={styles.section}>
-      <SectionHeader
-        title={t("随聊")}
-        count={recentSessions.length}
-        right={
-          contentLoading ? <ActivityIndicator size="small" color={palette.accent} /> : null
-        }
-      />
       {selectedWorkspaceCode ? (
         recentSessions.length ? (
           <Card style={styles.listCard}>
@@ -583,22 +700,110 @@ export function HomeScreen({ navigation }: Props) {
           />
         )
       ) : (
-        <Text style={styles.mutedText}>{t("请选择一个工作区。")}</Text>
+        <Text style={styles.mutedText}>{t("请选择一个工作空间。")}</Text>
       )}
     </View>
   );
 
-  const renderThemes = () => (
+  const renderDirectories = () => (
     <View style={styles.section}>
-      <SectionHeader
-        title={t("主题", "topics")}
-        count={projects.length}
-        right={
-          contentLoading ? <ActivityIndicator size="small" color={palette.accent} /> : null
-        }
-      />
       {!selectedWorkspaceCode ? (
-        <Text style={styles.mutedText}>{t("请选择一个工作区。")}</Text>
+        <Text style={styles.mutedText}>{t("请选择一个工作空间。")}</Text>
+      ) : directories.length === 0 ? (
+        <EmptyState
+          bare
+          icon="folder-open-outline"
+          title={t("还没有目录")}
+          message={t("在电脑端添加目录后，可以在这里按目录查看会话。")}
+        />
+      ) : (
+        <View style={styles.projectList}>
+          {directories.map((directory) => {
+            const directorySessions =
+              sessionsByDirectory.get(directory.directoryCode) ?? [];
+            const expanded = Boolean(
+              expandedDirectories[directory.directoryCode],
+            );
+            return (
+              <View key={directory.directoryCode} style={styles.projectCard}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={format(
+                    expanded ? "收起目录 {name}" : "展开目录 {name}",
+                    { name: directory.name },
+                  )}
+                  accessibilityState={{ expanded }}
+                  onPress={() =>
+                    setExpandedDirectories((previous) => ({
+                      ...previous,
+                      [directory.directoryCode]:
+                        !previous[directory.directoryCode],
+                    }))
+                  }
+                  style={({ pressed }) => [
+                    styles.projectHeader,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <View style={styles.projectIcon}>
+                    <Ionicons
+                      name="folder-outline"
+                      size={16}
+                      color={palette.accent}
+                    />
+                  </View>
+                  <View style={styles.projectTitleBlock}>
+                    <Text style={styles.projectName} numberOfLines={1}>
+                      {directory.name || directory.directoryCode}
+                    </Text>
+                    <Text style={styles.directoryPath} numberOfLines={1}>
+                      {directory.path}
+                    </Text>
+                  </View>
+                  {directory.available === false ? (
+                    <Badge label={t("目录不可用")} tone="danger" />
+                  ) : (
+                    <Badge label={`${directorySessions.length}`} />
+                  )}
+                  <Ionicons
+                    name={expanded ? "chevron-up" : "chevron-down"}
+                    size={16}
+                    color={palette.muted}
+                  />
+                </Pressable>
+
+                {expanded ? (
+                  <View style={styles.projectSessions}>
+                    {directorySessions.length ? (
+                      directorySessions.map((session, index) => (
+                        <View key={session.sessionCode}>
+                          {index > 0 ? <View style={styles.divider} /> : null}
+                          <SessionRow
+                            session={session}
+                            compact
+                            onPress={() => openSession(session)}
+                          />
+                        </View>
+                      ))
+                    ) : (
+                      <Text style={styles.projectEmpty}>
+                        {t("该目录下还没有会话。")}
+                      </Text>
+                    )}
+                  </View>
+                ) : null}
+              </View>
+            );
+          })}
+        </View>
+      )}
+    </View>
+  );
+
+  const renderTopics = () => (
+    <View style={styles.section}>
+      {!selectedWorkspaceCode ? (
+        <Text style={styles.mutedText}>{t("请选择一个工作空间。")}</Text>
       ) : projects.length === 0 ? (
         <EmptyState
           bare
@@ -639,7 +844,9 @@ export function HomeScreen({ navigation }: Props) {
                       {project.name}
                     </Text>
                     <Text style={styles.projectMeta} numberOfLines={1}>
-                      更新于 {formatRelativeTime(project.updatedAt)}
+                      {format("更新于 {time}", {
+                        time: formatRelativeTime(project.updatedAt),
+                      })}
                     </Text>
                   </View>
                   <Badge label={`${projectSessions.length}`} />
@@ -678,11 +885,61 @@ export function HomeScreen({ navigation }: Props) {
     </View>
   );
 
+  const tabLabel = (label: string, count: number) =>
+    count ? `${label} ${count}` : label;
+
+  const menuCount = (pageCode: string): number => {
+    if (pageCode === "chat.projects") return projects.length;
+    if (pageCode === "chat.directories") return directories.length;
+    if (pageCode === "chat.recents") return recentSessions.length;
+    return 0;
+  };
+
+  const activeMenu =
+    chatMenus.find((menu) => menu.pageCode === tab) ?? chatMenus[0];
+
+  const tabControl = (
+    <View style={styles.section}>
+      <View style={styles.tabsRow}>
+        <View style={styles.tabsControl}>
+          <SegmentedControl<string>
+            value={activeMenu?.pageCode ?? ""}
+            onChange={setTab}
+            options={chatMenus.map((menu) => ({
+              value: menu.pageCode,
+              label: tabLabel(menu.label, menuCount(menu.pageCode)),
+            }))}
+          />
+        </View>
+        {contentLoading ? (
+          <ActivityIndicator size="small" color={palette.accent} />
+        ) : null}
+      </View>
+    </View>
+  );
+
+  const activeTab = !activeMenu ? null : activeMenu.pageCode ===
+    "chat.projects" ? (
+    renderTopics()
+  ) : activeMenu.pageCode === "chat.directories" ? (
+    renderDirectories()
+  ) : activeMenu.pageCode === "chat.recents" ? (
+    renderChats()
+  ) : (
+    <EmptyState
+      bare
+      icon="apps-outline"
+      title={activeMenu.label}
+      message={t("手机暂不支持这个分组。")}
+    />
+  );
+
   return (
     <Screen>
       <AppHeader
         title={computer.name}
         subtitle={computer.baseUrl}
+        onBack={() => navigation.navigate("Dashboard")}
         right={
           <Badge
             withDot
@@ -773,35 +1030,18 @@ export function HomeScreen({ navigation }: Props) {
               <View style={styles.column}>
                 {renderDudeSection()}
                 {renderWorkspaceSection()}
-                {renderRecentSessions()}
               </View>
-              <View style={styles.column}>{renderThemes()}</View>
+              <View style={styles.column}>
+                {tabControl}
+                {activeTab}
+              </View>
             </View>
           ) : (
             <View style={styles.mobileStack}>
               {renderDudeSection()}
               {renderWorkspaceSection()}
-              <View style={styles.section}>
-                <SegmentedControl<HomeTab>
-                  value={tab}
-                  onChange={setTab}
-                  options={[
-                    {
-                      value: "recent",
-                      label: `${t("随聊")}${
-                        recentSessions.length ? ` ${recentSessions.length}` : ""
-                      }`,
-                    },
-                    {
-                      value: "themes",
-                      label: `${t("主题", "topics")}${
-                        projects.length ? ` ${projects.length}` : ""
-                      }`,
-                    },
-                  ]}
-                />
-              </View>
-              {tab === "recent" ? renderRecentSessions() : renderThemes()}
+              {tabControl}
+              {activeTab}
             </View>
           )}
         </ScrollView>
@@ -871,6 +1111,15 @@ const createStyles = (c: Palette) =>
     },
     section: {
       marginBottom: spacing.xxl,
+    },
+    tabsRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.sm,
+    },
+    tabsControl: {
+      flex: 1,
+      minWidth: 0,
     },
     mutedText: {
       color: c.muted,
@@ -1019,6 +1268,11 @@ const createStyles = (c: Palette) =>
       color: c.muted,
       ...typography.caption,
       fontSize: 11,
+    },
+    directoryPath: {
+      color: c.muted,
+      ...typography.mono,
+      fontSize: 10,
     },
     projectSessions: {
       paddingHorizontal: 4,

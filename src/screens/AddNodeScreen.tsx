@@ -70,7 +70,6 @@ export function AddNodeScreen({ navigation, route }: Props) {
   const [scanned, setScanned] = useState<PairingInfo | null>(null);
   const [manualUri, setManualUri] = useState("");
   const [cameraError, setCameraError] = useState<string | null>(null);
-  const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const mountedRef = useRef(true);
@@ -84,7 +83,6 @@ export function AddNodeScreen({ navigation, route }: Props) {
 
   const applyPairing = useCallback((pairing: PairingInfo) => {
     setScanned(pairing);
-    if (pairing.machineName) setName(pairing.machineName);
     setScanState("parsed");
     setError(null);
   }, []);
@@ -164,9 +162,10 @@ export function AddNodeScreen({ navigation, route }: Props) {
           publicBaseUrl: pairing.publicBaseUrl ?? null,
         };
         const deviceKey = await ensureDeviceKey(pairing.nodeId);
+        // The device name belongs to this phone, not to the computer. The node
+        // name comes from the pairing QR and is never sent back to the server.
         const tunnel = await tunnels.connectOnceBest(target, {
           ticket: pairing.ticket,
-          deviceName: name.trim() || pairing.machineName || undefined,
           handshakeTimeoutMs: 12_000,
           authTimeoutMs: 15_000,
         });
@@ -215,11 +214,7 @@ export function AddNodeScreen({ navigation, route }: Props) {
 
         await saveNode({
           productCode: targetProductCode,
-          name:
-            name.trim() ||
-            pairing.machineName?.trim() ||
-            ready.product.productName ||
-            t("Tron 电脑"),
+          name: pairing.machineName?.trim() || t("未命名电脑"),
           baseUrl: tunnel.baseUrl,
           lanBaseUrl: pairing.lanBaseUrl ?? null,
           publicBaseUrl: pairing.publicBaseUrl ?? null,
@@ -261,7 +256,6 @@ export function AddNodeScreen({ navigation, route }: Props) {
       addProduct,
       finish,
       format,
-      name,
       productCode,
       products,
       saveNode,
@@ -290,8 +284,6 @@ export function AddNodeScreen({ navigation, route }: Props) {
         <View style={styles.stack}>
           <PairingCard
             pairing={scanned}
-            name={name}
-            onChangeName={setName}
             submitting={submitting}
             onConnect={() => void connect(scanned)}
             onRescan={resetScan}
@@ -465,13 +457,6 @@ export function AddNodeScreen({ navigation, route }: Props) {
           ) : (
             <View style={styles.stack}>
               <TextField
-                label={t("节点名称（可选）")}
-                value={name}
-                onChangeText={setName}
-                placeholder={t("例如：书房 Mac")}
-                autoCapitalize="none"
-              />
-              <TextField
                 label={t("配对链接")}
                 value={manualUri}
                 onChangeText={setManualUri}
@@ -508,16 +493,12 @@ export function AddNodeScreen({ navigation, route }: Props) {
 
 function PairingCard({
   pairing,
-  name,
-  onChangeName,
   submitting,
   onConnect,
   onRescan,
   error,
 }: {
   pairing: PairingInfo;
-  name: string;
-  onChangeName: (value: string) => void;
   submitting: boolean;
   onConnect: () => void;
   onRescan: () => void;
@@ -547,7 +528,7 @@ function PairingCard({
         <View style={styles.detailList}>
           <DetailRow
             label={t("节点", "singular")}
-            value={pairing.machineName || name || t("未命名电脑")}
+            value={pairing.machineName || t("未命名电脑")}
           />
           <DetailRow label={t("地址")} value={pairing.baseUrl} mono />
           <DetailRow label={t("传输")} value={transportLabel} />
@@ -577,14 +558,6 @@ function PairingCard({
           />
         </View>
       </Card>
-
-      <TextField
-        label={t("节点名称（可选）")}
-        value={name}
-        onChangeText={onChangeName}
-        placeholder={t("例如：书房 Mac")}
-        autoCapitalize="none"
-      />
 
       <View style={styles.infoCard}>
         <View style={styles.infoRow}>

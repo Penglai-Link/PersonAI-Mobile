@@ -127,6 +127,7 @@ export function NodesScreen({ navigation, route }: Props) {
     <Screen>
       <AppHeader
         title={product?.name ?? t("产品", "singular")}
+        onBack={() => navigation.navigate("Dashboard")}
         right={
           <Pressable
             accessibilityRole="button"
@@ -309,12 +310,6 @@ function NodeCard({
             tone={node.transport === "public" ? "success" : "muted"}
           />
           <Badge label={node.keyId} tone="muted" />
-          {node.methods.length ? (
-            <Badge
-              label={format("{count} 个方法", { count: node.methods.length })}
-              tone="muted"
-            />
-          ) : null}
         </View>
 
         <View style={styles.cardFooter}>

@@ -48,6 +48,10 @@ import {
 import { translate } from "../i18n";
 
 const CONNECT_TIMEOUT_MS = 10_000;
+/** LAN candidates fail fast; a local socket either opens quickly or is absent. */
+const LAN_CONNECT_TIMEOUT_MS = 4_000;
+/** Do not retry an endpoint that just failed until the network changes. */
+const ENDPOINT_RETRY_MS = 30_000;
 const AUTH_TIMEOUT_MS = 15_000;
 const CALL_TIMEOUT_MS = 30_000;
 const STREAM_IDLE_TIMEOUT_MS = 180_000;
@@ -96,6 +100,18 @@ export function tunnelEndpoints(target: TunnelTarget): TunnelEndpoint[] {
     endpoints.push({ baseUrl: url, transport: transportForBaseUrl(url) });
   }
   return endpoints;
+}
+
+/**
+ * Current access network. On cellular a LAN address cannot work, so probing it
+ * only burns the connect timeout; the pool drops LAN candidates in that case.
+ */
+export type TunnelNetworkKind = "lan-capable" | "cellular" | "unknown";
+
+let networkKind: TunnelNetworkKind = "unknown";
+
+export function setTunnelNetworkKind(kind: TunnelNetworkKind): void {
+  networkKind = kind;
 }
 
 export interface TunnelProduct {
@@ -178,6 +194,20 @@ function socketOpen(socket: WebSocket): boolean {
 
 function tunnelError(code: string, message: string): ApiError {
   return new ApiError(message, { code, status: remoteErrorStatus(code) });
+}
+
+/**
+ * Name this phone registers on the node. It identifies the client device in
+ * the desktop's paired-device list; it is not the computer's name.
+ */
+function defaultDeviceName(): string {
+  const platform =
+    Platform.OS === "ios"
+      ? "iOS"
+      : Platform.OS === "android"
+        ? "Android"
+        : Platform.OS;
+  return `PersonAI Mobile (${platform})`;
 }
 
 function abortError(): ApiError {
@@ -561,7 +591,7 @@ export class SecureTunnel {
         ...(ticket ? { ticket } : {}),
         ...(this.target.deviceId ? { deviceId: this.target.deviceId } : {}),
         device: {
-          name: options.deviceName?.trim() || `PersonAI Mobile ${Platform.OS}`,
+          name: options.deviceName?.trim() || defaultDeviceName(),
           platform: Platform.OS,
           publicKey: bytesToBase64Url(deviceKey.publicKey),
           keyId: deviceKey.keyId,
@@ -1123,6 +1153,10 @@ export class SecureTunnelPool {
     { tunnel: SecureTunnel; lastUsedAt: number }
   >();
   private readonly connecting = new Map<string, Promise<SecureTunnel>>();
+  /** Last endpoint that completed a handshake, per node. */
+  private readonly preferredBaseUrls = new Map<string, string>();
+  /** Endpoints that failed recently, per node + URL; skipped until expiry. */
+  private readonly endpointFailures = new Map<string, number>();
   private sweep: ReturnType<typeof setInterval> | null = null;
   /**
    * Incremented by `closeAll` (app background / node switch). A connection that
@@ -1136,17 +1170,110 @@ export class SecureTunnelPool {
   }
 
   async acquire(target: TunnelTarget): Promise<SecureTunnel> {
-    const endpoints = tunnelEndpoints(target);
+    // A live tunnel is always the fastest path. Re-walking the endpoint list
+    // here used to re-open (and time out on) an unreachable LAN address for
+    // every single RPC batch, turning each screen load into a 10s wait.
+    const cached = this.liveTunnelFor(target);
+    if (cached) return cached;
+
     let lastError: unknown = null;
-    for (const endpoint of endpoints) {
+    for (const endpoint of this.endpointOrder(target)) {
       try {
-        return await this.acquireOne({ ...target, ...endpoint });
+        const tunnel = await this.acquireOne(
+          { ...target, ...endpoint },
+          endpoint.transport === "lan" ? LAN_CONNECT_TIMEOUT_MS : undefined,
+        );
+        this.noteEndpointSuccess(target, endpoint);
+        return tunnel;
       } catch (error) {
+        this.noteEndpointFailure(target, endpoint);
         lastError = error;
       }
     }
     if (lastError) throw lastError;
     throw tunnelError("TUNNEL_CLOSED", translate("节点没有可用地址"));
+  }
+
+  /**
+   * Returns a live cached tunnel for the node regardless of which endpoint it
+   * uses. The pool is keyed by endpoint, but to the caller a node is one node.
+   */
+  private liveTunnelFor(target: TunnelTarget): SecureTunnel | null {
+    const prefix = `${target.nodeId || ""}|`;
+    let best: { tunnel: SecureTunnel; lastUsedAt: number } | null = null;
+    for (const [key, entry] of [...this.entries.entries()]) {
+      if (!key.startsWith(prefix)) continue;
+      if (entry.tunnel.isClosed) {
+        this.entries.delete(key);
+        continue;
+      }
+      if (!best || entry.lastUsedAt > best.lastUsedAt) best = entry;
+    }
+    if (!best) return null;
+    best.lastUsedAt = Date.now();
+    return best.tunnel;
+  }
+
+  private endpointKey(target: TunnelTarget, endpoint: TunnelEndpoint): string {
+    return `${target.nodeId || ""}|${endpoint.baseUrl}`;
+  }
+
+  private noteEndpointSuccess(
+    target: TunnelTarget,
+    endpoint: TunnelEndpoint,
+  ): void {
+    this.preferredBaseUrls.set(target.nodeId || "", endpoint.baseUrl);
+    this.endpointFailures.delete(this.endpointKey(target, endpoint));
+  }
+
+  private noteEndpointFailure(
+    target: TunnelTarget,
+    endpoint: TunnelEndpoint,
+  ): void {
+    this.endpointFailures.set(
+      this.endpointKey(target, endpoint),
+      Date.now() + ENDPOINT_RETRY_MS,
+    );
+  }
+
+  /**
+   * Network-aware, health-aware candidate order: keep the documented
+   * LAN -> public -> active order but try the last good endpoint first, skip
+   * LAN on cellular, and temporarily skip endpoints that just failed. If every
+   * candidate is cooling down, all of them are retried rather than failing.
+   */
+  private endpointOrder(target: TunnelTarget): TunnelEndpoint[] {
+    let endpoints = tunnelEndpoints(target);
+    if (networkKind === "cellular") {
+      const external = endpoints.filter((endpoint) => endpoint.transport !== "lan");
+      if (external.length) endpoints = external;
+    }
+
+    const preferred = this.preferredBaseUrls.get(target.nodeId || "");
+    const ranked = [...endpoints];
+    if (preferred) {
+      ranked.sort((left, right) => {
+        const leftRank = left.baseUrl === preferred ? 0 : 1;
+        const rightRank = right.baseUrl === preferred ? 0 : 1;
+        return leftRank - rightRank;
+      });
+    }
+
+    const now = Date.now();
+    const healthy = ranked.filter((endpoint) => {
+      const retryAt = this.endpointFailures.get(
+        this.endpointKey(target, endpoint),
+      );
+      return retryAt === undefined || retryAt <= now;
+    });
+    return healthy.length ? healthy : ranked;
+  }
+
+  /** Drops a tunnel from the cache without touching preferred/failure hints. */
+  private dropTunnel(tunnel: SecureTunnel): void {
+    for (const [key, entry] of [...this.entries.entries()]) {
+      if (entry.tunnel === tunnel) this.entries.delete(key);
+    }
   }
 
   private async acquireOne(
@@ -1197,9 +1324,14 @@ export class SecureTunnelPool {
     options: TunnelConnectOptions = {},
   ): Promise<SecureTunnel> {
     let lastError: unknown = null;
-    for (const endpoint of tunnelEndpoints(target)) {
+    for (const endpoint of this.endpointOrder(target)) {
       try {
-        return await this.connectOnce({ ...target, ...endpoint }, options);
+        const tunnel = await this.connectOnce(
+          { ...target, ...endpoint },
+          options,
+        );
+        this.noteEndpointSuccess(target, endpoint);
+        return tunnel;
       } catch (error) {
         lastError = error;
         if (
@@ -1211,6 +1343,56 @@ export class SecureTunnelPool {
         ) {
           throw error;
         }
+        this.noteEndpointFailure(target, endpoint);
+      }
+    }
+    if (lastError) throw lastError;
+    throw tunnelError("TUNNEL_CLOSED", translate("节点没有可用地址"));
+  }
+
+  /**
+   * Reuses a live tunnel when one exists, otherwise walks the candidate order
+   * until a tunnel answers a heartbeat. Failed candidates are cooled down so a
+   * stale LAN address is not re-probed on every refresh.
+   */
+  private async connectVerified(
+    target: TunnelTarget,
+    timeoutMs: number,
+    handshakeTimeoutFor: (endpoint: TunnelEndpoint) => number,
+  ): Promise<SecureTunnel> {
+    const cached = this.liveTunnelFor(target);
+    if (cached) {
+      try {
+        await cached.ping(timeoutMs);
+        return cached;
+      } catch {
+        cached.close();
+        this.dropTunnel(cached);
+      }
+    }
+
+    let lastError: unknown = null;
+    for (const endpoint of this.endpointOrder(target)) {
+      try {
+        // `acquireOne` shares an in-flight handshake with `acquire`, so a
+        // status probe and a screen load cannot open two sockets for the same
+        // endpoint and orphan one of them.
+        const tunnel = await this.acquireOne(
+          { ...target, ...endpoint },
+          handshakeTimeoutFor(endpoint),
+        );
+        try {
+          await tunnel.ping(timeoutMs);
+        } catch (error) {
+          tunnel.close();
+          this.dropTunnel(tunnel);
+          throw error;
+        }
+        this.noteEndpointSuccess(target, endpoint);
+        return tunnel;
+      } catch (error) {
+        this.noteEndpointFailure(target, endpoint);
+        lastError = error;
       }
     }
     if (lastError) throw lastError;
@@ -1222,19 +1404,16 @@ export class SecureTunnelPool {
     target: TunnelTarget,
     timeoutMs = 1_200,
   ): Promise<TunnelEndpoint | null> {
-    for (const endpoint of tunnelEndpoints(target)) {
-      try {
-        const tunnel = await this.connectOnce(
-          { ...target, ...endpoint },
-          { handshakeTimeoutMs: Math.max(6_000, timeoutMs + 4_000) },
-        );
-        await tunnel.ping(timeoutMs);
-        return endpoint;
-      } catch (error) {
-            // Try the next candidate.
-      }
+    try {
+      const tunnel = await this.connectVerified(
+        target,
+        timeoutMs,
+        (endpoint) => this.handshakeTimeoutFor(endpoint, 6_000, timeoutMs),
+      );
+      return { baseUrl: tunnel.baseUrl, transport: tunnel.transport };
+    } catch {
+      return null;
     }
-    return null;
   }
 
   async probe(target: TunnelTarget, timeoutMs = 5_000): Promise<boolean> {
@@ -1246,19 +1425,21 @@ export class SecureTunnelPool {
     target: TunnelTarget,
     timeoutMs = 5_000,
   ): Promise<SecureTunnel> {
-    for (const endpoint of tunnelEndpoints(target)) {
-      try {
-        const tunnel = await this.connectOnce(
-          { ...target, ...endpoint },
-          { handshakeTimeoutMs: Math.max(8_000, timeoutMs) },
-        );
-        await tunnel.ping(timeoutMs);
-        return tunnel;
-      } catch {
-        // Try the next candidate.
-      }
-    }
-    throw tunnelError("TUNNEL_CLOSED", translate("节点没有可用地址"));
+    return this.connectVerified(
+      target,
+      timeoutMs,
+      (endpoint) => this.handshakeTimeoutFor(endpoint, 8_000, timeoutMs),
+    );
+  }
+
+  private handshakeTimeoutFor(
+    endpoint: TunnelEndpoint,
+    publicMinimumMs: number,
+    extraMs: number,
+  ): number {
+    return endpoint.transport === "lan"
+      ? LAN_CONNECT_TIMEOUT_MS
+      : Math.max(publicMinimumMs, extraMs);
   }
 
   closeNode(target: TunnelTarget): void {
@@ -1269,6 +1450,10 @@ export class SecureTunnelPool {
         entry.tunnel.close();
       }
     }
+    this.preferredBaseUrls.delete(target.nodeId || "");
+    for (const key of [...this.endpointFailures.keys()]) {
+      if (key.startsWith(prefix)) this.endpointFailures.delete(key);
+    }
   }
 
   closeAll(): void {
@@ -1277,6 +1462,16 @@ export class SecureTunnelPool {
     this.entries.clear();
     this.connecting.clear();
     for (const tunnel of tunnels) tunnel.close();
+  }
+
+  /**
+   * Called when the access network changes (Wi-Fi <-> cellular). It lets the
+   * next attempt re-evaluate LAN from scratch instead of trusting a cached
+   * public/LAN preference from the previous network.
+   */
+  clearEndpointHints(): void {
+    this.preferredBaseUrls.clear();
+    this.endpointFailures.clear();
   }
 
   private async open(

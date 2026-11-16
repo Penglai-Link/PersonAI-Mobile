@@ -7,7 +7,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -17,10 +16,8 @@ import {
 
 import {
   listChatMessages,
-  listSessionGroups,
   sendChatMessageStream,
   type ChatMessage,
-  type ChatSession,
 } from "../api/tron";
 import { AppHeader } from "../components/AppHeader";
 import { Button } from "../components/Button";
@@ -31,7 +28,6 @@ import { MessageBubble as LocalMessageBubble } from "../components/MessageBubble
 import { MessageBubble as AgentMessageBubble } from "@personai/agent-ui-chat-react-native";
 import type { ChatMessage as AgentChatMessage } from "@personai/agent-ui-chat-core/headless";
 import { Screen } from "../components/Screen";
-import { SessionRow } from "../components/SessionRow";
 import { Ionicons } from "../components/icons";
 import { useI18n } from "../i18n";
 import type { RootStackParamList } from "../navigation/types";
@@ -45,16 +41,9 @@ import {
   useThemedStyles,
   type Palette,
 } from "../theme";
-import { describeError, isAbortError, parseTimestamp } from "../utils/format";
+import { describeError, isAbortError } from "../utils/format";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Chat">;
-
-function sortByUpdatedDesc(left: ChatSession, right: ChatSession): number {
-  return (
-    (parseTimestamp(right.updatedAt)?.getTime() ?? 0) -
-    (parseTimestamp(left.updatedAt)?.getTime() ?? 0)
-  );
-}
 
 function toAgentMessage(message: ChatMessage, sessionCode: string): AgentChatMessage {
   const createdAt =
@@ -124,8 +113,6 @@ export function ChatScreen({ navigation, route }: Props) {
   const [streamText, setStreamText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [sidebarSessions, setSidebarSessions] = useState<ChatSession[]>([]);
-  const [sidebarLoading, setSidebarLoading] = useState(false);
 
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
@@ -219,39 +206,6 @@ export function ChatScreen({ navigation, route }: Props) {
       return null;
     }
   }, [effectiveDudeCode, sessionCode, sessionRequest, sessionStatus, workspaceCode]);
-
-  useEffect(() => {
-    if (!wide || sessionStatus !== "online" || !workspaceCode) return;
-    let cancelled = false;
-    setSidebarLoading(true);
-    setSidebarSessions([]);
-    void sessionRequest(({ tunnel }) =>
-      listSessionGroups({
-        tunnel,
-        workspaceCode,
-      }),
-    )
-      .then((groups) => {
-        if (cancelled) return;
-        const byCode = new Map<string, ChatSession>();
-        for (const group of groups) {
-          for (const item of group.sessions ?? []) {
-            const isManual = (item.sourceType ?? "").toUpperCase() === "MANUAL";
-            if (isManual && !item.projectCode && !item.directoryCode) {
-              byCode.set(item.sessionCode, item);
-            }
-          }
-        }
-        setSidebarSessions([...byCode.values()].sort(sortByUpdatedDesc));
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        if (!cancelled) setSidebarLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionRequest, sessionStatus, wide, workspaceCode]);
 
   const scrollToBottom = useCallback((animated: boolean) => {
     listRef.current?.scrollToEnd({ animated });
@@ -372,16 +326,6 @@ export function ChatScreen({ navigation, route }: Props) {
     }
   };
 
-  const openSidebarSession = (target: ChatSession) => {
-    if (target.sessionCode === sessionCode) return;
-    navigation.setParams({
-      session: target,
-      workspaceCode: target.workspaceCode ?? workspaceCode,
-      dudeCode: null,
-      dudeName: null,
-    });
-  };
-
   const horizontalPadding = 20;
   const offline = sessionStatus === "offline";
   const canSend =
@@ -441,37 +385,6 @@ export function ChatScreen({ navigation, route }: Props) {
           </View>
         ) : (
           <View style={[styles.body, { paddingHorizontal: wide ? 32 : 0 }]}>
-            {wide ? (
-              <View style={styles.sidebar}>
-                <View style={styles.sidebarHeader}>
-                  <Text style={styles.sidebarTitle}>{t("随聊")}</Text>
-                  <Text style={styles.sidebarCount}>{sidebarSessions.length}</Text>
-                </View>
-                {sidebarLoading ? (
-                  <LoadingView compact />
-                ) : sidebarSessions.length ? (
-                  <ScrollView
-                    showsVerticalScrollIndicator={false}
-                    contentContainerStyle={styles.sidebarList}
-                  >
-                    {sidebarSessions.map((item) => (
-                      <SessionRow
-                        key={item.sessionCode}
-                        session={item}
-                        compact
-                        active={item.sessionCode === sessionCode}
-                        onPress={() => openSidebarSession(item)}
-                      />
-                    ))}
-                  </ScrollView>
-                ) : (
-                  <Text style={styles.sidebarEmpty}>
-                    {t("还没有随聊会话")}
-                  </Text>
-                )}
-              </View>
-            ) : null}
-
             <View style={styles.chatColumn}>
               {notice ? (
                 <View style={styles.bannerWrap}>
@@ -630,40 +543,7 @@ const createStyles = (c: Palette) =>
     },
     body: {
       flex: 1,
-      flexDirection: "row",
       width: "100%",
-      gap: spacing.xxl,
-    },
-    sidebar: {
-      width: layout.chatSidebarWidth,
-      paddingRight: spacing.lg,
-      borderRightWidth: StyleSheet.hairlineWidth,
-      borderRightColor: c.border,
-    },
-    sidebarHeader: {
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      paddingVertical: spacing.md,
-      paddingHorizontal: spacing.sm,
-    },
-    sidebarTitle: {
-      color: c.text,
-      ...typography.section,
-    },
-    sidebarCount: {
-      color: c.muted,
-      ...typography.caption,
-    },
-    sidebarList: {
-      paddingBottom: spacing.xl,
-      gap: 2,
-    },
-    sidebarEmpty: {
-      color: c.muted,
-      ...typography.caption,
-      padding: spacing.lg,
-      lineHeight: 18,
     },
     chatColumn: {
       flex: 1,

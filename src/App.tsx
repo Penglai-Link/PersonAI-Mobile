@@ -86,6 +86,11 @@ function AppNavigator() {
     };
   }, [palette, resolvedMode]);
 
+  const openDashboard = useCallback(() => {
+    closeDrawer();
+    if (navigationRef.isReady()) navigationRef.navigate("Dashboard");
+  }, [closeDrawer, navigationRef]);
+
   const openSettings = useCallback(() => {
     closeDrawer();
     if (navigationRef.isReady()) navigationRef.navigate("Settings");
@@ -154,6 +159,7 @@ function AppNavigator() {
       </NavigationContainer>
       <AppDrawer
         currentRoute={routeName}
+        onOpenDashboard={openDashboard}
         onOpenSettings={openSettings}
         onScan={openScanner}
         onOpenSession={openSessionFromDrawer}

@@ -27,7 +27,6 @@ export const enMessages: Record<string, string> = {
   "会话": "Sessions",
   "例如 Tron Studio": "e.g. Tron Studio",
   "例如 studio": "e.g. studio",
-  "例如：书房 Mac": "e.g. Study Mac",
   "保存": "Save",
   "允许使用相机": "Allow camera access",
   "先选产品，再选该产品的节点": "Pick a product, then one of its nodes",
@@ -71,7 +70,9 @@ export const enMessages: Record<string, string> = {
   "尚未连接": "Not connected",
   "尚未选择节点": "No node selected",
   "展开": "Expand",
-  "工作区": "Workspace",
+  "工作空间": "Workspace",
+  "工作区": "Projects",
+  "手机暂不支持这个分组。": "This section is not supported on mobile yet.",
   "已停用": "Disabled",
   "已取消不安全连接，未发送任何请求。":
     "The insecure connection was cancelled. No request was sent.",
@@ -136,28 +137,25 @@ export const enMessages: Record<string, string> = {
   "电脑离线": "Computer offline",
   "电脑端可在“设置 → 外观”安装皮肤；移动端会自动读取。":
     "Install skins in Settings → Appearance on the computer; the mobile app will pick them up.",
-  "留空时使用节点上报的机器名":
-    "Leave blank to use the machine name reported by the node",
   "离线": "Offline",
   "粘贴配对令牌": "Paste pairing token",
   "继续连接": "Continue",
   "节点": "Nodes",
   "节点 ID": "Node ID",
-  "节点名称（可选）": "Node name (optional)",
   "节点地址": "Node address",
   "节点没有提供皮肤": "No node skins available",
   "节点皮肤": "Node skins",
   "节点离线": "Node offline",
   "节点默认": "Node default",
   "该 Dude 已停用": "This Dude is disabled",
-  "该会话缺少工作区信息，请刷新后重试":
+  "该会话缺少工作空间信息，请刷新后重试":
     "This session has no workspace information. Refresh and try again.",
   "该节点使用非 HTTPS 地址，配对令牌、JWT 和聊天内容会以明文在网络上传输。只应在可信局域网或临时调试环境中使用。确定继续连接？":
     "This node uses a non-HTTPS address. The pairing token, JWT and chat content will travel in plain text. Use this only on a trusted LAN or in a temporary debugging setup. Continue?",
   "请求失败，请稍后重试": "Request failed. Try again later.",
   "请稍后重试。": "Try again later.",
   "请输入配对令牌": "Enter the pairing token",
-  "请选择一个工作区。": "Choose a workspace.",
+  "请选择一个工作空间。": "Choose a workspace.",
   "跟随系统": "System",
   "跟随节点当前激活的皮肤": "Follow the node's active skin",
   "输入消息…": "Message…",
@@ -171,11 +169,12 @@ export const enMessages: Record<string, string> = {
   "还没有节点": "No nodes yet",
   "还没有选中节点": "No node selected",
   "还没有随聊": "No chats yet",
-  "还没有随聊会话": "No chat sessions yet",
   "这个 Dude 还没有描述。": "This Dude has no description yet.",
-  "这台电脑还没有可用工作区，无法打开 Dude 会话":
+  "这台电脑还没有可用工作空间，无法打开 Dude 会话":
     "This computer has no available workspace, so the Dude session cannot open.",
-  "这台电脑还没有可用的工作区。": "This computer has no available workspace.",
+  "这台电脑还没有可用的工作空间。": "This computer has no available workspace.",
+  "这台电脑还没有可用的工作空间，无法创建会话。":
+    "This computer has no available workspace, so a chat cannot be created.",
   "这台节点的配对令牌已不存在，请删除后重新扫码或手动配对。":
     "This node's pairing token is gone. Delete it and pair again by scan or manually.",
   "进入会话": "Open session",
@@ -284,7 +283,11 @@ export const enMessages: Record<string, string> = {
   "最近连接 {time}": "Last connected {time}",
   "打开节点：{name}": "Open node {name}",
   "删除节点：{name}": "Delete node {name}",
-  "切换到工作区 {name}": "Switch to workspace {name}",
+  "展开产品：{name}": "Expand product {name}",
+  "收起产品：{name}": "Collapse product {name}",
+  "切换到工作空间 {name}": "Switch to workspace {name}",
+  "展开工作空间 {name}": "Expand workspace {name}",
+  "收起工作空间 {name}": "Collapse workspace {name}",
   "收起主题 {name}": "Collapse topic {name}",
   "展开主题 {name}": "Expand topic {name}",
   "点击卡片进入节点；点击右上角菜单可删除节点并清除其配对令牌。":
@@ -358,6 +361,16 @@ export const enMessages: Record<string, string> = {
     "Before saving, POST /api/v1/remote/session verifies the pairing token and returns a short-lived JWT. The pairing token lives in secure storage and the JWT stays in memory. Remote nodes must use HTTPS; http:// is allowed only after you confirm Insecure debug.",
   "该主题下还没有手动会话。": "No manual sessions under this topic yet.",
   "目录": "Directories",
+  "更新于 {time}": "Updated {time}",
+  "还没有目录": "No directories yet",
+  "在电脑端添加目录后，可以在这里按目录查看会话。":
+    "Add directories on your computer to browse their sessions here.",
+  "该目录下还没有会话。": "No sessions in this directory yet.",
+  "展开目录 {name}": "Expand directory {name}",
+  "展开分组 {name}": "Expand group {name}",
+  "收起分组 {name}": "Collapse group {name}",
+  "收起目录 {name}": "Collapse directory {name}",
+  "目录不可用": "Directory unavailable",
   "正在读取会话…": "Loading sessions…",
   "没有会话": "No sessions",
   "请先添加一个节点": "Add a node first.",
@@ -377,7 +390,6 @@ export const enMessages: Record<string, string> = {
 
   "PersonAI 使用相机扫描电脑端展示的配对二维码。你也可以手动粘贴配对链接。":
     "PersonAI uses the camera to scan the pairing QR code shown on your computer. You can also paste a pairing link manually.",
-  "{count} 个方法": "{count} methods",
   "{error}\n你仍然可以使用手动输入粘贴配对链接。":
     "{error}\nYou can still paste a pairing link under manual input.",
   "与节点的连接发生错误": "The connection to the node failed.",

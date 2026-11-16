@@ -33,16 +33,19 @@ You do not have to pick a computer first, and one offline machine never hides th
 
 ## Swipe from the left edge to open your sessions
 
-On any screen, swipe right from the left edge to open the drawer. It is organized in three levels:
+On any screen, swipe right from the left edge to open the drawer. It is organized by product, node, workspace, and session group:
 
 ```text
 Product
 └── Node
-    └── Session group
-        └── Session
+    └── Workspace
+        └── Session group
+            └── Session subgroup
+                └── Session
 ```
 
-- Tron Harness is grouped by topic, directory, and quick chat; other products use a single session list.
+- The first level comes from the product's navigation widgets (for Tron: topics, directories, quick chats); the product owns the labels and order.
+- The second level also comes from product data: project name for topics, directory name for directories; quick chats list sessions directly. Products without these groupings fall back to a flat session list.
 - Multiple computers under the same product are listed together.
 - Sessions load on demand and live only in memory; they are cleared when you switch nodes or go offline.
 
@@ -108,7 +111,6 @@ At home on the same Wi-Fi, the app connects directly. Away from home, it switche
 ## Known limitations
 
 - Early preview: device testing and store distribution are not finished.
-- The session tree reads only the first active workspace of each computer.
 - Messages are plain text; Markdown and attachments are not rendered yet.
 - Public access requires you to configure a tunnel; no relay service is provided by default.
 - The web preview is for debugging only, not for production use.

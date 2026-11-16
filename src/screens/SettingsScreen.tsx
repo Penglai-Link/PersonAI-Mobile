@@ -16,13 +16,14 @@ import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 import { InlineBanner } from "../components/InlineBanner";
 import { Screen } from "../components/Screen";
+import { StatusDot } from "../components/StatusDot";
 import { SegmentedControl } from "../components/SegmentedControl";
 import { Select } from "../components/Select";
 import { TextField } from "../components/TextField";
 import { Ionicons } from "../components/icons";
 import { useI18n, type Language } from "../i18n";
 import type { RootStackParamList } from "../navigation/types";
-import { useConnections } from "../store/connections";
+import { useConnections, type SavedNode } from "../store/connections";
 import {
   radius,
   spacing,
@@ -42,12 +43,16 @@ export function SettingsScreen() {
     useTheme();
   const { t, format, language, setLanguage } = useI18n();
   const styles = useThemedStyles(createStyles);
-  const { products, nodes, addProduct, removeProduct } = useConnections();
+  const { products, nodes, addProduct, removeProduct, removeNode } =
+    useConnections();
 
   const [showAdd, setShowAdd] = useState(false);
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const [expandedProducts, setExpandedProducts] = useState<
+    Record<string, boolean>
+  >({});
 
   const modeOptions: ReadonlyArray<{ value: ThemeMode; label: string }> = [
     { value: "system", label: t("跟随系统") },
@@ -60,10 +65,29 @@ export function SettingsScreen() {
     { value: "en", label: "English" },
   ];
 
-  const nodeCountFor = useCallback(
-    (productCode: string) =>
-      nodes.filter((node) => node.productCode === productCode).length,
-    [nodes],
+  const toggleProduct = useCallback((productCode: string) => {
+    setExpandedProducts((previous) => ({
+      ...previous,
+      [productCode]: previous[productCode] !== true,
+    }));
+  }, []);
+
+  const removeNodeItem = useCallback(
+    (node: SavedNode) => {
+      confirmDestructive({
+        title: t("删除节点"),
+        message: format(
+          "确定删除「{name}」？系统安全存储中的设备密钥也会被删除。",
+          { name: node.name },
+        ),
+        onConfirm: () => {
+          void removeNode(node.id).catch((error) => {
+            Alert.alert(t("删除失败"), describeError(error));
+          });
+        },
+      });
+    },
+    [format, removeNode, t],
   );
 
   const remove = useCallback(
@@ -245,50 +269,126 @@ export function SettingsScreen() {
           ) : null}
 
           <View style={styles.productList}>
-            {products.map((product) => (
-              <View key={product.code} style={styles.productRow}>
-                <View style={styles.productIcon}>
-                  <Ionicons
-                    name="cube-outline"
-                    size={16}
-                    color={palette.muted}
-                  />
-                </View>
-                <View style={styles.productText}>
-                  <View style={styles.productNameRow}>
-                    <Text style={styles.productName} numberOfLines={1}>
-                      {product.name}
-                    </Text>
-                    {product.builtIn ? (
-                      <Badge label={t("内置")} tone="accent" />
+            {products.map((product) => {
+              const productNodes = nodes.filter(
+                (node) => node.productCode === product.code,
+              );
+              const expanded = expandedProducts[product.code] === true;
+              return (
+                <View key={product.code} style={styles.productBlock}>
+                  <View style={styles.productRow}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityState={{ expanded }}
+                      accessibilityLabel={format(
+                        expanded
+                          ? "收起产品：{name}"
+                          : "展开产品：{name}",
+                        { name: product.name },
+                      )}
+                      onPress={() => toggleProduct(product.code)}
+                      style={({ pressed }) => [
+                        styles.productMain,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <View style={styles.productIcon}>
+                        <Ionicons
+                          name="cube-outline"
+                          size={16}
+                          color={palette.muted}
+                        />
+                      </View>
+                      <View style={styles.productText}>
+                        <View style={styles.productNameRow}>
+                          <Text style={styles.productName} numberOfLines={1}>
+                            {product.name}
+                          </Text>
+                          {product.builtIn ? (
+                            <Badge label={t("内置")} tone="accent" />
+                          ) : null}
+                        </View>
+                        <Text style={styles.productMeta} numberOfLines={1}>
+                          {product.code} ·{" "}
+                          {formatNodeCount(productNodes.length)}
+                        </Text>
+                      </View>
+                      <Ionicons
+                        name={expanded ? "chevron-down" : "chevron-forward"}
+                        size={15}
+                        color={palette.muted}
+                      />
+                    </Pressable>
+                    {!product.builtIn ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={format("删除产品：{name}", {
+                          name: product.name,
+                        })}
+                        onPress={() => remove(product)}
+                        hitSlop={8}
+                        style={({ pressed }) => [
+                          styles.trashButton,
+                          styles.productTrash,
+                          pressed && styles.pressed,
+                        ]}
+                      >
+                        <Ionicons
+                          name="trash-outline"
+                          size={16}
+                          color={palette.muted}
+                        />
+                      </Pressable>
                     ) : null}
                   </View>
-                  <Text style={styles.productMeta} numberOfLines={1}>
-                    {product.code} · {formatNodeCount(nodeCountFor(product.code))}
-                  </Text>
+
+                  {expanded ? (
+                    <View style={styles.nodeList}>
+                      {productNodes.length === 0 ? (
+                        <Text style={styles.nodeEmpty}>
+                          {t("还没有节点")}
+                        </Text>
+                      ) : (
+                        productNodes.map((node) => (
+                          <View key={node.id} style={styles.nodeRow}>
+                            <StatusDot online={node.online} size={6} />
+                            <View style={styles.nodeText}>
+                              <Text style={styles.nodeName} numberOfLines={1}>
+                                {node.name}
+                              </Text>
+                              <Text
+                                style={styles.nodeAddress}
+                                numberOfLines={1}
+                              >
+                                {node.baseUrl}
+                              </Text>
+                            </View>
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={format("删除节点：{name}", {
+                                name: node.name,
+                              })}
+                              onPress={() => removeNodeItem(node)}
+                              hitSlop={8}
+                              style={({ pressed }) => [
+                                styles.trashButton,
+                                pressed && styles.pressed,
+                              ]}
+                            >
+                              <Ionicons
+                                name="trash-outline"
+                                size={16}
+                                color={palette.muted}
+                              />
+                            </Pressable>
+                          </View>
+                        ))
+                      )}
+                    </View>
+                  ) : null}
                 </View>
-                {!product.builtIn ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={format("删除产品：{name}", {
-                      name: product.name,
-                    })}
-                    onPress={() => remove(product)}
-                    hitSlop={8}
-                    style={({ pressed }) => [
-                      styles.trashButton,
-                      pressed && styles.pressed,
-                    ]}
-                  >
-                    <Ionicons
-                      name="trash-outline"
-                      size={16}
-                      color={palette.muted}
-                    />
-                  </Pressable>
-                ) : null}
-              </View>
-            ))}
+              );
+            })}
           </View>
         </Card>
       </ScrollView>
@@ -370,16 +470,29 @@ const createStyles = (c: Palette) =>
     productList: {
       gap: spacing.sm,
     },
+    productBlock: {
+      gap: spacing.xs,
+    },
     productRow: {
       flexDirection: "row",
       alignItems: "center",
-      gap: spacing.md,
-      paddingHorizontal: spacing.md,
-      paddingVertical: spacing.md,
       borderRadius: radius.control,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: c.border,
       backgroundColor: c.surfaceAlt,
+      overflow: "hidden",
+    },
+    productMain: {
+      flex: 1,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.md,
+      minWidth: 0,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.md,
+    },
+    productTrash: {
+      marginRight: spacing.sm,
     },
     productIcon: {
       width: 32,
@@ -416,6 +529,44 @@ const createStyles = (c: Palette) =>
       borderRadius: 16,
       alignItems: "center",
       justifyContent: "center",
+    },
+    nodeList: {
+      gap: 2,
+      marginLeft: spacing.md,
+      paddingHorizontal: spacing.xs,
+      paddingVertical: spacing.xs,
+      borderRadius: radius.control,
+      backgroundColor: c.surface,
+    },
+    nodeRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.sm,
+      minHeight: 44,
+      paddingHorizontal: spacing.sm,
+      borderRadius: radius.control,
+    },
+    nodeText: {
+      flex: 1,
+      gap: 1,
+      minWidth: 0,
+    },
+    nodeName: {
+      color: c.text,
+      ...typography.bodyStrong,
+      fontSize: 13,
+    },
+    nodeAddress: {
+      color: c.muted,
+      ...typography.mono,
+      fontSize: 10,
+      letterSpacing: 0.2,
+    },
+    nodeEmpty: {
+      color: c.muted,
+      ...typography.caption,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: spacing.sm,
     },
     pressed: {
       opacity: 0.75,

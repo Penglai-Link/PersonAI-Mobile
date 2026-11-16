@@ -27,6 +27,7 @@ import type { ChatSession } from "../api/tron";
 import { useI18n } from "../i18n";
 import type { SavedNode } from "../store/connections";
 import {
+  radius,
   spacing,
   typography,
   useTheme,
@@ -99,6 +100,7 @@ export function useDrawer(): DrawerContextValue {
 
 interface AppDrawerProps {
   currentRoute?: keyof RootStackParamList;
+  onOpenDashboard: () => void;
   onOpenSettings: () => void;
   onScan: () => void;
   onOpenSession: (
@@ -110,6 +112,7 @@ interface AppDrawerProps {
 
 export function AppDrawer({
   currentRoute,
+  onOpenDashboard,
   onOpenSettings,
   onScan,
   onOpenSession,
@@ -141,6 +144,7 @@ export function AppDrawer({
   });
 
   const settingsActive = currentRoute === "Settings";
+  const dashboardActive = currentRoute === "Dashboard";
 
   return (
     <View
@@ -213,6 +217,28 @@ export function AppDrawer({
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t("看板")}
+            accessibilityState={{ selected: dashboardActive }}
+            onPress={onOpenDashboard}
+            style={({ pressed }) => [
+              styles.homeRow,
+              dashboardActive && styles.homeRowActive,
+              pressed && styles.pressed,
+            ]}
+          >
+            <View style={styles.homeIcon}>
+              <Ionicons name="grid-outline" size={16} color={palette.accent} />
+            </View>
+            <Text style={styles.homeLabel}>{t("看板")}</Text>
+            <Ionicons
+              name="chevron-forward"
+              size={14}
+              color={dashboardActive ? palette.accent : palette.muted}
+            />
+          </Pressable>
+          <View style={styles.homeDivider} />
           <DrawerTree active={isOpen} onOpenSession={onOpenSession} />
         </ScrollView>
       </Animated.View>
@@ -285,6 +311,38 @@ const createStyles = (c: Palette) =>
       paddingHorizontal: spacing.md,
       paddingTop: spacing.md,
       paddingBottom: spacing.xl,
+    },
+    homeRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.sm,
+      minHeight: 44,
+      paddingHorizontal: spacing.sm,
+      borderRadius: radius.control,
+    },
+    homeRowActive: {
+      backgroundColor: c.accentSoft,
+    },
+    homeIcon: {
+      width: 28,
+      height: 28,
+      borderRadius: 9,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: c.accentSoft,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.accentBorder,
+    },
+    homeLabel: {
+      flex: 1,
+      color: c.text,
+      ...typography.bodyStrong,
+      fontSize: 14,
+    },
+    homeDivider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: c.border,
+      marginVertical: spacing.sm,
     },
     pressed: {
       opacity: 0.72,

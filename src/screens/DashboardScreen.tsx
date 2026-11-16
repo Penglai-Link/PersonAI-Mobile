@@ -48,7 +48,7 @@ interface NodeSummary {
   node: SavedNode;
   sessions: ChatSession[];
   dudes: Dude[];
-  workspaceCode: string | null;
+  defaultWorkspaceCode: string | null;
   error: string | null;
 }
 
@@ -130,9 +130,11 @@ export function DashboardScreen({ navigation }: Props) {
             const overview = await loadNodeOverview(node, requestForNode);
             return {
               node,
-              sessions: overview.sessions,
+              sessions: overview.workspaces.flatMap(
+                (workspace) => workspace.sessions,
+              ),
               dudes: overview.dudes,
-              workspaceCode: overview.workspaceCode,
+              defaultWorkspaceCode: overview.defaultWorkspaceCode,
               error: null,
             };
           } catch (error) {
@@ -140,7 +142,7 @@ export function DashboardScreen({ navigation }: Props) {
               node,
               sessions: [],
               dudes: [],
-              workspaceCode: null,
+              defaultWorkspaceCode: null,
               error: describeError(error),
             };
           }
@@ -214,7 +216,7 @@ export function DashboardScreen({ navigation }: Props) {
           node: summary.node,
           session,
           workspaceCode:
-            summary.workspaceCode ?? session.workspaceCode ?? "",
+            session.workspaceCode ?? summary.defaultWorkspaceCode ?? "",
         });
       }
     }
@@ -226,12 +228,12 @@ export function DashboardScreen({ navigation }: Props) {
   const dudes = useMemo<DashboardDude[]>(() => {
     const result: DashboardDude[] = [];
     for (const summary of Object.values(summaries)) {
-      if (!summary.workspaceCode) continue;
+      if (!summary.defaultWorkspaceCode) continue;
       for (const dude of summary.dudes) {
         result.push({
           node: summary.node,
           dude,
-          workspaceCode: summary.workspaceCode,
+          workspaceCode: summary.defaultWorkspaceCode,
         });
       }
     }
@@ -241,6 +243,28 @@ export function DashboardScreen({ navigation }: Props) {
       return left.node.name.localeCompare(right.node.name);
     });
   }, [summaries]);
+
+  // Dudes belong to a node. With more than one node contributing, a flat list
+  // hides where each Dude lives, so group by node and show the node header.
+  const dudeGroups = useMemo(() => {
+    const byNode = new Map<string, DashboardDude[]>();
+    for (const item of dudes) {
+      const list = byNode.get(item.node.id) ?? [];
+      list.push(item);
+      byNode.set(item.node.id, list);
+    }
+    return [...byNode.values()]
+      .map((items) =>
+        [...items].sort((left, right) => {
+          const main = Number(right.dude.isMain) - Number(left.dude.isMain);
+          if (main !== 0) return main;
+          return left.dude.name.localeCompare(right.dude.name);
+        }),
+      )
+      .sort((left, right) =>
+        left[0].node.name.localeCompare(right[0].node.name),
+      );
+  }, [dudes]);
 
   const openDude = useCallback(
     async (item: DashboardDude) => {
@@ -365,7 +389,6 @@ export function DashboardScreen({ navigation }: Props) {
                 ? t("正在汇总…")
                 : format("共 {count} 个会话", { count: totalSessions })
             }
-            accent
           />
         </View>
 
@@ -383,6 +406,40 @@ export function DashboardScreen({ navigation }: Props) {
             </View>
           ) : dudes.length === 0 ? (
             <EmptyState bare icon="sparkles-outline" title={t("暂无 Dude")} />
+          ) : dudeGroups.length > 1 ? (
+            <View style={styles.dudeGroups}>
+              {dudeGroups.map((group) => {
+                const node = group[0].node;
+                return (
+                  <View key={node.id} style={styles.dudeGroup}>
+                    <View style={styles.dudeGroupHeader}>
+                      <StatusDot online={node.online} size={6} />
+                      <Text style={styles.dudeGroupName} numberOfLines={1}>
+                        {node.name}
+                      </Text>
+                      <Text style={styles.dudeGroupCount}>{group.length}</Text>
+                    </View>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.dudeList}
+                    >
+                      {group.map((item) => {
+                        const key = `${item.node.id}:${item.dude.dudeCode}`;
+                        return (
+                          <DudeCard
+                            key={key}
+                            dude={item.dude}
+                            opening={openingDudeKey === key}
+                            onPress={() => void openDude(item)}
+                          />
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+                );
+              })}
+            </View>
           ) : (
             <ScrollView
               horizontal
@@ -476,28 +533,20 @@ function MetricCard({
   label,
   value,
   hint,
-  accent = false,
 }: {
   icon: IconName;
   label: string;
   value: number | string;
   hint?: string;
-  accent?: boolean;
 }) {
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
   return (
-    <View style={[styles.metricCard, accent && styles.metricCardAccent]}>
+    <View style={styles.metricCard}>
       <View style={styles.metricIcon}>
-        <Ionicons
-          name={icon}
-          size={16}
-          color={accent ? palette.accent : palette.muted}
-        />
+        <Ionicons name={icon} size={16} color={palette.muted} />
       </View>
-      <Text style={[styles.metricValue, accent && { color: palette.accent }]}>
-        {value}
-      </Text>
+      <Text style={styles.metricValue}>{value}</Text>
       <Text style={styles.metricLabel}>{label}</Text>
       {hint ? (
         <Text style={styles.metricHint} numberOfLines={2}>
@@ -539,10 +588,6 @@ const createStyles = (c: Palette) =>
       borderColor: c.border,
       backgroundColor: c.surface,
     },
-    metricCardAccent: {
-      borderColor: c.accentBorder,
-      backgroundColor: c.accentSoft,
-    },
     metricIcon: {
       width: 28,
       height: 28,
@@ -574,6 +619,28 @@ const createStyles = (c: Palette) =>
     },
     list: {
       gap: spacing.sm,
+    },
+    dudeGroups: {
+      gap: spacing.lg,
+    },
+    dudeGroup: {
+      gap: spacing.sm,
+    },
+    dudeGroupHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.sm,
+    },
+    dudeGroupName: {
+      flex: 1,
+      color: c.text,
+      ...typography.bodyStrong,
+      fontSize: 12,
+    },
+    dudeGroupCount: {
+      color: c.muted,
+      ...typography.caption,
+      fontSize: 10,
     },
     dudeList: {
       gap: spacing.md,

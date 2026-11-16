@@ -31,8 +31,10 @@ PersonAI Mobile 的 Expo + React Native 移动端，目录与 Tron 主仓库同�
   设置页集中主题、语言与产品定义，不要在其它页面另开入口。
 - 默认首页是看板（`src/screens/DashboardScreen.tsx`）：产品/节点/会话/运行中指标、跨节点
   Dude、运行中会话。看板通过 `loadNodeOverview` 汇总每个节点，不要为汇总切换当前节点。
-- 侧滑菜单会话树：只展示有节点的产品，结构为产品 → 节点 → 会话分组 → 会话；Tron 使用
-  主题 / 目录 / 随聊分组，其他产品为单层会话列表。树数据必须通过
+- 侧滑菜单会话树：只展示有节点的产品，结构为产品 → 节点 → 工作空间 → 一级分组 →
+  二级分组 → 会话。一级分组来自产品返回的导航菜单（`tron.navigation.menus`，
+  Tron 为 主题 / 工作区 / 随聊），二级分组来自项目/目录数据；不得写死分组名称和顺序。
+  其他产品没有导航分组时退化为单层会话列表。树数据必须通过
   `NodeSession.requestForNode(node, …)` 按节点读取，不得为了读取树数据切换当前节点，也
   不得新增绕过 HTTPS/JWT 的请求路径。会话元数据仅缓存在内存中。
 - 传输只有两种：`https -> public(WSS)`、`http -> lan(WS)`；两种都必须有配对时固定的 `nodeKey`。
@@ -46,7 +48,7 @@ PersonAI Mobile 的 Expo + React Native 移动端，目录与 Tron 主仓库同�
 - Agent UI：聊天持久消息使用 `@personai/agent-ui-chat-react-native` 的 `MessageBubble`；
   A2UI 消息通过其内嵌的 `@personai/agent-ui-a2ui-react-native` 渲染，不要把 web 的
   `chat-react`/`a2ui-react` 或 CSS 引入 RN。这些包来自同级 `../eliteforge-agent-ui/packages`，
-  使用 npm 版本 `1.0.0-preview.14`（agent-ui 已发布），不要再用 `file:` 本地依赖。
+  使用 npm 版本 `1.0.0-preview.16`（agent-ui 已发布），不要再用 `file:` 本地依赖。
 - 节点支持双地址：`SavedNode` 保存 `lanBaseUrl` / `publicBaseUrl`，`baseUrl` 是当前活动
   endpoint；`tunnelEndpoints` 按 LAN → public → 当前地址顺序探测，`SecureTunnelPool`
   逐个回退。网络变化由 `expo-network` 监听并重新 probe；不要假设节点只有单地址。

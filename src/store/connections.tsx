@@ -1,5 +1,10 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { addNetworkStateListener } from "expo-network";
+import {
+  addNetworkStateListener,
+  getNetworkStateAsync,
+  NetworkStateType,
+  type NetworkState,
+} from "expo-network";
 import {
   createContext,
   useCallback,
@@ -17,7 +22,12 @@ import {
   type NodeTransport,
 } from "../api/client";
 import { deleteDeviceKey } from "../crypto/keys";
-import { tunnels, type TunnelTarget } from "../api/tunnel";
+import {
+  setTunnelNetworkKind,
+  tunnels,
+  type TunnelNetworkKind,
+  type TunnelTarget,
+} from "../api/tunnel";
 import { TRON_PRODUCT_CODE, TRON_PRODUCT_NAME } from "../api/tron";
 import { translate } from "../i18n";
 
@@ -249,6 +259,36 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
   const currentNodeIdRef = useRef<string | null>(null);
   const hydratedRef = useRef(false);
   const probingRef = useRef(false);
+  const networkRef = useRef<{
+    connected: boolean;
+    kind: TunnelNetworkKind;
+  } | null>(null);
+  const networkChangedRef = useRef(false);
+
+  /**
+   * Keeps the tunnel pool aware of the access network: LAN candidates cannot
+   * work on cellular and must be re-evaluated after a handover. Returns true
+   * when this is an actual transition rather than the initial state. Transient
+   * UNKNOWN states are ignored so they cannot tear down a working tunnel.
+   */
+  const applyNetworkState = useCallback((state: NetworkState): boolean => {
+    const connected = state.isConnected === true;
+    const kind: TunnelNetworkKind = !connected
+      ? "unknown"
+      : state.type === NetworkStateType.CELLULAR
+        ? "cellular"
+        : "lan-capable";
+    setTunnelNetworkKind(kind);
+    const previous = networkRef.current;
+    const changed =
+      previous !== null &&
+      (previous.connected !== connected ||
+        (previous.kind !== "unknown" &&
+          kind !== "unknown" &&
+          previous.kind !== kind));
+    networkRef.current = { connected, kind };
+    return changed;
+  }, []);
 
   useEffect(() => {
     productsRef.current = products;
@@ -316,6 +356,14 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
         nodesRef.current = storedNodes;
         setProducts(storedProducts);
         setNodes(storedNodes);
+        try {
+          // Resolve the network kind before screens start loading so a cellular
+          // phone does not spend the LAN connect timeout first.
+          applyNetworkState(await getNetworkStateAsync());
+        } catch {
+          // Keep the unknown network kind; LAN is tried before public.
+        }
+        if (cancelled) return;
         hydratedRef.current = true;
         setReady(true);
         void probeNodes(storedNodes);
@@ -329,7 +377,7 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [probeNodes]);
+  }, [applyNetworkState, probeNodes]);
 
   useEffect(() => {
     if (!hydratedRef.current) return;
@@ -590,12 +638,21 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
     let disposed = false;
     const subscription = addNetworkStateListener((state) => {
       if (disposed) return;
+      if (applyNetworkState(state)) networkChangedRef.current = true;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         if (!hydratedRef.current) return;
+        const changed = networkChangedRef.current;
+        networkChangedRef.current = false;
         if (!state.isConnected) {
           for (const node of nodesRef.current) markNodeOffline(node.id);
           return;
+        }
+        if (changed) {
+          // The old sockets belong to the previous network. Drop them so the
+          // re-probe can pick LAN (Wi-Fi) instead of reusing a public tunnel.
+          tunnels.closeAll();
+          tunnels.clearEndpointHints();
         }
         void probeNodes(nodesRef.current);
       }, 600);
@@ -605,7 +662,7 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
       if (timer) clearTimeout(timer);
       subscription.remove();
     };
-  }, [markNodeOffline, probeNodes]);
+  }, [applyNetworkState, markNodeOffline, probeNodes]);
 
   const currentNode = useMemo(
     () => nodes.find((node) => node.id === currentNodeId) ?? null,
