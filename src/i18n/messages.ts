@@ -287,6 +287,7 @@ export const enMessages: Record<string, string> = {
   "{count} 天前": "{count} days ago",
   "最近连接 {time}": "Last connected {time}",
   "打开节点：{name}": "Open node {name}",
+  "在 {name} 上新建会话": "Start a new session on {name}",
   "删除节点：{name}": "Delete node {name}",
   "展开产品：{name}": "Expand product {name}",
   "收起产品：{name}": "Collapse product {name}",

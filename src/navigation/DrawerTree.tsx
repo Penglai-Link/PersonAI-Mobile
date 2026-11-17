@@ -9,6 +9,7 @@ import {
 
 import {
   TRON_PRODUCT_CODE,
+  createChatSession,
   type ChatSession,
   type NavigationMenu,
 } from "../api/tron";
@@ -80,7 +81,12 @@ interface TreeWorkspace {
 type NodeTreeState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; workspaces: TreeWorkspace[] };
+  | {
+      status: "ready";
+      workspaces: TreeWorkspace[];
+      /** First active workspace; where a node-level new session is created. */
+      defaultWorkspaceCode: string | null;
+    };
 
 function sortByUpdatedDesc(left: TreeSession, right: TreeSession): number {
   return (
@@ -219,7 +225,14 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
   const [nodeStates, setNodeStates] = useState<Record<string, NodeTreeState>>(
     {},
   );
+  const [creatingNodeId, setCreatingNodeId] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<{
+    nodeId: string;
+    message: string;
+  } | null>(null);
   const wasActiveRef = useRef(false);
+  /** Guards double taps before `creatingNodeId` reaches the next render. */
+  const creatingRef = useRef(false);
 
   // Session metadata is memory-only conversation content: drop it when the
   // active node changes, the app backgrounds, or a node goes offline.
@@ -228,6 +241,7 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
     setNodeStates({});
     setExpandedWorkspaces({});
     setExpandedGroups({});
+    setCreateError(null);
   }, [contentEpoch]);
 
   const productsWithNodes = useMemo(
@@ -267,6 +281,10 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
 
   const loadNode = useCallback(
     async (node: SavedNode) => {
+      // A fresh read supersedes any failed create shown under this node.
+      setCreateError((previous) =>
+        previous?.nodeId === node.id ? null : previous,
+      );
       setNodeStates((previous) => ({
         ...previous,
         [node.id]: { status: "loading" },
@@ -281,6 +299,7 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
           [node.id]: {
             status: "ready",
             workspaces: buildNodeWorkspaces(node, overview, menus),
+            defaultWorkspaceCode: overview.defaultWorkspaceCode,
           },
         }));
       } catch (error) {
@@ -294,6 +313,53 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
       }
     },
     [fallbackMenus, requestForNode],
+  );
+
+  /**
+   * Starts a plain session on a specific node without switching the active
+   * node first: `requestForNode` shares the node's tunnel, so the session is
+   * created against the node the user tapped even when another node is active.
+   * `onOpenSession` then selects that node and opens the new session.
+   */
+  const createSession = useCallback(
+    async (node: SavedNode) => {
+      if (creatingRef.current) return;
+      creatingRef.current = true;
+      setCreatingNodeId(node.id);
+      setCreateError(null);
+      try {
+        const state = nodeStates[node.id];
+        let workspaceCode =
+          state?.status === "ready" ? state.defaultWorkspaceCode : null;
+        // A collapsed node has no overview yet; read just the workspace list.
+        if (state?.status !== "ready") {
+          const overview = await loadNodeOverview(node, requestForNode);
+          workspaceCode = overview.defaultWorkspaceCode;
+        }
+        if (!workspaceCode) {
+          setCreateError({
+            nodeId: node.id,
+            message: t("这台电脑还没有可用的工作空间，无法创建会话。"),
+          });
+          return;
+        }
+        const targetWorkspaceCode = workspaceCode;
+        const session = await requestForNode(node, ({ tunnel }) =>
+          createChatSession({ tunnel, workspaceCode: targetWorkspaceCode }),
+        );
+        onOpenSession(
+          node,
+          session,
+          session.workspaceCode ?? targetWorkspaceCode,
+        );
+      } catch (error) {
+        setCreateError({ nodeId: node.id, message: describeError(error) });
+      } finally {
+        creatingRef.current = false;
+        setCreatingNodeId(null);
+      }
+    },
+    [nodeStates, onOpenSession, requestForNode, t],
   );
 
   useEffect(() => {
@@ -397,6 +463,8 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
             ? productNodes.map((node) => {
                 const nodeOpen = Boolean(expandedNodes[node.id]);
                 const state = nodeStates[node.id];
+                const createFailure =
+                  createError?.nodeId === node.id ? createError.message : null;
 
                 const renderSession = (item: TreeSession) => (
                   <Pressable
@@ -642,45 +710,98 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
 
                 return (
                   <View key={node.id}>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityState={{ expanded: nodeOpen }}
-                      accessibilityLabel={format("打开节点：{name}", {
-                        name: node.name,
-                      })}
-                      onPress={() => toggleNode(node)}
-                      style={({ pressed }) => [
-                        styles.nodeRow,
-                        pressed && styles.pressed,
-                      ]}
-                    >
-                      <StatusDot online={node.online} size={6} />
-                      <View style={styles.nodeText}>
-                        <Text style={styles.nodeName} numberOfLines={1}>
-                          {node.name}
+                    <View style={styles.nodeRow}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityState={{ expanded: nodeOpen }}
+                        accessibilityLabel={format("打开节点：{name}", {
+                          name: node.name,
+                        })}
+                        onPress={() => toggleNode(node)}
+                        style={({ pressed }) => [
+                          styles.nodeToggle,
+                          pressed && styles.pressed,
+                        ]}
+                      >
+                        <StatusDot online={node.online} size={6} />
+                        <View style={styles.nodeText}>
+                          <Text style={styles.nodeName} numberOfLines={1}>
+                            {node.name}
+                          </Text>
+                          <Text style={styles.nodeAddress} numberOfLines={1}>
+                            {node.baseUrl}
+                          </Text>
+                        </View>
+                        <NodeLatencyText
+                          nodeId={node.id}
+                          showPlaceholder
+                          style={styles.nodeLatency}
+                        />
+                        {state?.status === "loading" ? (
+                          <ActivityIndicator
+                            size="small"
+                            color={palette.accent}
+                          />
+                        ) : (
+                          <Ionicons
+                            name={nodeOpen ? "chevron-down" : "chevron-forward"}
+                            size={13}
+                            color={palette.muted}
+                          />
+                        )}
+                      </Pressable>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={format("在 {name} 上新建会话", {
+                          name: node.name,
+                        })}
+                        accessibilityState={{
+                          busy: creatingNodeId === node.id,
+                          disabled: creatingNodeId !== null,
+                        }}
+                        disabled={creatingNodeId !== null}
+                        hitSlop={6}
+                        onPress={() => void createSession(node)}
+                        style={({ pressed }) => [
+                          styles.nodeCreate,
+                          creatingNodeId !== null &&
+                            creatingNodeId !== node.id &&
+                            styles.nodeCreateDisabled,
+                          pressed && styles.pressed,
+                        ]}
+                      >
+                        {creatingNodeId === node.id ? (
+                          <ActivityIndicator
+                            size="small"
+                            color={palette.accent}
+                          />
+                        ) : (
+                          <Ionicons
+                            name="add"
+                            size={16}
+                            color={palette.accent}
+                          />
+                        )}
+                      </Pressable>
+                    </View>
+
+                    {createFailure &&
+                      (state?.status !== "error" ||
+                        state.message !== createFailure) ? (
+                      <View style={styles.createErrorRow}>
+                        <Text style={styles.errorText} numberOfLines={3}>
+                          {createFailure}
                         </Text>
-                        <Text style={styles.nodeAddress} numberOfLines={1}>
-                          {node.baseUrl}
-                        </Text>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={t("重试")}
+                          onPress={() => void createSession(node)}
+                          hitSlop={6}
+                        >
+                          <Text style={styles.retryText}>{t("重试")}</Text>
+                        </Pressable>
                       </View>
-                      <NodeLatencyText
-                        nodeId={node.id}
-                        showPlaceholder
-                        style={styles.nodeLatency}
-                      />
-                      {state?.status === "loading" ? (
-                        <ActivityIndicator
-                          size="small"
-                          color={palette.accent}
-                        />
-                      ) : (
-                        <Ionicons
-                          name={nodeOpen ? "chevron-down" : "chevron-forward"}
-                          size={13}
-                          color={palette.muted}
-                        />
-                      )}
-                    </Pressable>
+                    ) : null}
 
                     {nodeOpen ? (
                       <View style={styles.nodeBody}>
@@ -759,11 +880,37 @@ const createStyles = (c: Palette) =>
     nodeRow: {
       flexDirection: "row",
       alignItems: "center",
+      gap: 2,
+      paddingLeft: spacing.xl,
+      paddingRight: spacing.xs,
+      borderRadius: radius.control,
+    },
+    nodeToggle: {
+      flex: 1,
+      flexDirection: "row",
+      alignItems: "center",
       gap: spacing.sm,
       minHeight: 40,
-      paddingLeft: spacing.xl,
-      paddingRight: spacing.sm,
-      borderRadius: radius.control,
+      minWidth: 0,
+    },
+    nodeCreate: {
+      width: 26,
+      height: 26,
+      borderRadius: 13,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: c.accentSoft,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.accentBorder,
+    },
+    nodeCreateDisabled: {
+      opacity: 0.4,
+    },
+    createErrorRow: {
+      marginLeft: spacing.xl + spacing.sm,
+      marginRight: spacing.sm,
+      paddingVertical: spacing.xs,
+      gap: 4,
     },
     nodeText: {
       flex: 1,
