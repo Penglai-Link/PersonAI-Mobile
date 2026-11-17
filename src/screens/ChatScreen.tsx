@@ -37,7 +37,6 @@ import { Ionicons } from "../components/icons";
 import { useI18n } from "../i18n";
 import type { RootStackParamList } from "../navigation/types";
 import { useNodeSession } from "../store/nodeSession";
-import { formatChatMarkdown } from "../utils/chatMarkdown";
 import {
   layout,
   radius,
@@ -81,9 +80,7 @@ function toAgentMessage(
     actor: isUser
       ? (message.actor ?? "user")
       : assistantName?.trim() || message.actor || "assistant",
-    // Tables and fenced code use a nested ScrollView that breaks the Android
-    // transcript layout; see `formatChatMarkdown`.
-    content: isUser ? message.content : formatChatMarkdown(message.content),
+    content: message.content,
     createdAt,
     ...(message.a2ui ? { a2ui: message.a2ui } : {}),
   };
