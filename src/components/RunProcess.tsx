@@ -111,7 +111,7 @@ export function RunProcess({ trace, live = false }: RunProcessProps) {
               key={tool.id}
               toolName={tool.name || "tool"}
               args={tool.args}
-              result={tool.result}
+              result={tool.name === "tool_execute" ? "" : tool.result}
               status={toolStatus(tool)}
               locale={language}
               theme={{

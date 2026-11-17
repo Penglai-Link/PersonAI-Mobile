@@ -1,3 +1,4 @@
+import { toolResultIsError } from "@personai/agent-ui-chat-core/headless";
 import type { AgUiEvent } from "../api/rpc";
 
 export type RunTraceStatus = "running" | "completed" | "failed";
@@ -59,9 +60,19 @@ function parseJson(value: string): unknown {
   }
 }
 
-function toolStatusFromResult(content: string, event: AgUiEvent): RunToolStatus {
+function toolStatusFromResult(
+  content: string,
+  event: AgUiEvent,
+  toolName: string,
+): RunToolStatus {
+  // Gateway envelopes describe dispatch, not the inner tool. The Web rail
+  // presents the inner call, so a rejected envelope must not turn its card
+  // into a failure — the inner call owns that status.
+  if (toolName.trim().toLowerCase() === "tool_execute") return "completed";
+  // Match the Web card: only a top-level `isError` turns the call into a
+  // failure. Nested `isError` flags belong to inner structured data.
   if (event.isError === true) return "failed";
-  return /"isError"\s*:\s*true/.test(content) ? "failed" : "completed";
+  return toolResultIsError(content) ? "failed" : "completed";
 }
 
 function updateTool(
@@ -247,7 +258,7 @@ export function reduceRunTrace(
     return updateTool(current, toolCallId, (tool) => ({
       ...tool,
       result,
-      status: toolStatusFromResult(result, event),
+      status: toolStatusFromResult(result, event, tool.name),
       endedAt,
     }));
   }

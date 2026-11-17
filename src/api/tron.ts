@@ -41,6 +41,9 @@ export const TRON_RPC_METHODS = {
   sessionGroups: "tron.session.groups",
   chatProtocolEvents: "tron.chat.protocolEvents",
   chatSteer: "tron.chat.steer",
+  chatAnswerUserInput: "tron.chat.answerUserInput",
+  chatA2uiState: "tron.chat.a2uiState",
+  chatA2uiAction: "tron.chat.a2uiAction",
   navigationMenus: "tron.navigation.menus",
 } as const;
 
@@ -595,6 +598,115 @@ export async function steerChatMessage(
   return normalizeSessionMessage(data.message, params.sessionCode);
 }
 
+/** `tron.chat.answerUserInput` — resumes an ask-user/approval pause. */
+export interface ChatResumeEntryInput {
+  interruptId: string;
+  status: "resolved" | "cancelled";
+  payload: unknown;
+}
+
+export interface AnswerChatUserInputParams extends ApiParams {
+  sessionCode: string;
+  requestCode: string;
+  answers?: unknown[];
+  resume?: ChatResumeEntryInput[];
+  a2uiMetadata?: unknown;
+}
+
+export async function answerChatUserInput(
+  params: AnswerChatUserInputParams,
+): Promise<AgUiEvent[]> {
+  const data = await callTron<unknown>(
+    params,
+    TRON_RPC_METHODS.chatAnswerUserInput,
+    {
+      sessionCode: params.sessionCode,
+      requestCode: params.requestCode,
+      answers: params.answers ?? [],
+      resume: params.resume ?? [],
+      ...(params.a2uiMetadata !== undefined
+        ? { a2uiMetadata: params.a2uiMetadata }
+        : {}),
+      clientCapabilities: { userInputRequests: true },
+    },
+    180_000,
+  );
+  return Array.isArray(data)
+    ? data
+        .filter((entry): entry is Record<string, unknown> => isRecord(entry))
+        .map((entry) => entry as AgUiEvent)
+    : [];
+}
+
+/** Canonical A2UI state used to hydrate native surfaces and actions. */
+export interface ChatA2uiStatePayload {
+  sessionId: string;
+  revision: number;
+  surfaces: Array<Record<string, unknown>>;
+  pendingInteractions: Array<Record<string, unknown>>;
+}
+
+export async function getChatA2uiState(
+  params: ApiParams & { sessionCode: string },
+): Promise<ChatA2uiStatePayload | null> {
+  const data = await callTron<unknown>(
+    params,
+    TRON_RPC_METHODS.chatA2uiState,
+    { sessionCode: params.sessionCode },
+    20_000,
+  );
+  if (!isRecord(data)) return null;
+  const surfaces = Array.isArray(data.surfaces)
+    ? data.surfaces.filter((entry): entry is Record<string, unknown> =>
+        isRecord(entry),
+      )
+    : [];
+  const pendingInteractions = Array.isArray(data.pendingInteractions)
+    ? data.pendingInteractions.filter((entry): entry is Record<string, unknown> =>
+        isRecord(entry),
+      )
+    : [];
+  return {
+    sessionId:
+      typeof data.sessionId === "string" ? data.sessionId : params.sessionCode,
+    revision: typeof data.revision === "number" ? data.revision : 0,
+    surfaces,
+    pendingInteractions,
+  };
+}
+
+export interface RunChatA2uiActionParams extends ApiParams {
+  sessionCode: string;
+  actionId: string;
+  surfaceInstanceId: string;
+  expectedRevision: number;
+  message: unknown;
+  metadata: unknown;
+}
+
+export async function runChatA2uiAction(
+  params: RunChatA2uiActionParams,
+): Promise<AgUiEvent[]> {
+  const data = await callTron<unknown>(
+    params,
+    TRON_RPC_METHODS.chatA2uiAction,
+    {
+      sessionCode: params.sessionCode,
+      actionId: params.actionId,
+      surfaceInstanceId: params.surfaceInstanceId,
+      expectedRevision: params.expectedRevision,
+      message: params.message,
+      metadata: params.metadata,
+    },
+    180_000,
+  );
+  return Array.isArray(data)
+    ? data
+        .filter((entry): entry is Record<string, unknown> => isRecord(entry))
+        .map((entry) => entry as AgUiEvent)
+    : [];
+}
+
 /* ------------------------------------------------------------------ */
 /* Generic session.* methods (used by the chat screen)                 */
 /* ------------------------------------------------------------------ */
@@ -676,7 +788,7 @@ export async function sendChatMessageStream(
     {
       sessionId: params.sessionCode,
       content: params.content,
-      clientCapabilities: { userInputRequests: false },
+      clientCapabilities: { userInputRequests: true },
       metadata: {
         workspaceCode: params.workspaceCode ?? null,
         assistantCode: params.assistantCode ?? null,

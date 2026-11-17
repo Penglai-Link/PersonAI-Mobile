@@ -48,7 +48,7 @@ PersonAI Mobile 的 Expo + React Native 移动端，目录与 Tron 主仓库同�
 - Agent UI：聊天持久消息使用 `@personai/agent-ui-chat-react-native` 的 `MessageBubble`；
   A2UI 消息通过其内嵌的 `@personai/agent-ui-a2ui-react-native` 渲染，不要把 web 的
   `chat-react`/`a2ui-react` 或 CSS 引入 RN。这些包来自同级 `../eliteforge-agent-ui/packages`，
-  使用 npm 版本 `1.0.0-preview.16`（agent-ui 已发布），不要再用 `file:` 本地依赖。
+  使用 npm 版本 `1.0.0-preview.21`（agent-ui 已发布），不要再用 `file:` 本地依赖。
 - 节点支持双地址：`SavedNode` 保存 `lanBaseUrl` / `publicBaseUrl`，`baseUrl` 是当前活动
   endpoint；`tunnelEndpoints` 按 LAN → public → 当前地址顺序探测，`SecureTunnelPool`
   逐个回退。网络变化由 `expo-network` 监听并重新 probe；不要假设节点只有单地址。

@@ -16,12 +16,16 @@ import {
   ASSISTANT_SOURCE_TYPE,
   listAssistants,
   listChatMessages,
+  answerChatUserInput,
+  getChatA2uiState,
   listChatProtocolEvents,
+  runChatA2uiAction,
   sendChatMessageStream,
   steerChatMessage,
   stopChatRun,
   type ChatMessage,
 } from "../api/tron";
+import type { AgUiEvent } from "../api/rpc";
 import { AppHeader } from "../components/AppHeader";
 import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
@@ -30,8 +34,23 @@ import { LoadingView } from "../components/LoadingView";
 import { MessageBubble as LocalMessageBubble } from "../components/MessageBubble";
 import { NodeLatencyText } from "../components/NodeLatency";
 import { RunProcess } from "../components/RunProcess";
-import { MessageBubble as AgentMessageBubble } from "@personai/agent-ui-chat-react-native";
-import type { ChatMessage as AgentChatMessage } from "@personai/agent-ui-chat-core/headless";
+import {
+  ApprovalCard,
+  MessageBubble as AgentMessageBubble,
+} from "@personai/agent-ui-chat-react-native";
+import {
+  ChatA2uiSession,
+  batchApprovalDecisions,
+  nativeUserInputBatchAnswer,
+  nativeUserInputRequests,
+  pendingApprovalRequests,
+  type ChatA2uiActionHandler,
+  type ChatA2uiState,
+  type ChatMessage as AgentChatMessage,
+  type ChatUserInputAnswer,
+  type ChatUserInputLabels,
+  type ChatUserInputRequest,
+} from "@personai/agent-ui-chat-core/headless";
 import { Screen } from "../components/Screen";
 import { Ionicons } from "../components/icons";
 import { useI18n } from "../i18n";
@@ -154,6 +173,9 @@ export function ChatScreen({ navigation, route }: Props) {
   const [liveTrace, setLiveTrace] = useState<RunTrace | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [queued, setQueued] = useState<QueuedChatMessage[]>([]);
+  const [pendingRequests, setPendingRequests] = useState<ChatUserInputRequest[]>([]);
+  const [answering, setAnswering] = useState(false);
+  const [a2uiRevision, setA2uiRevision] = useState(0);
 
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const messagesSeqRef = useRef(0);
@@ -168,6 +190,11 @@ export function ChatScreen({ navigation, route }: Props) {
   /** Guards the one reload per online transition. */
   const onlineLoadedRef = useRef(false);
   const queuedRef = useRef<QueuedChatMessage[]>([]);
+  const a2uiSession = useMemo(() => new ChatA2uiSession(sessionCode), [sessionCode]);
+  const a2uiSessionRef = useRef(a2uiSession);
+  const answeredRequestIdsRef = useRef(new Set<string>());
+  const pendingRequestsRef = useRef<ChatUserInputRequest[]>([]);
+  const a2uiBusyRef = useRef(false);
   /** Assistant name lookup for sessions opened without one (drawer, running). */
   const assistantLookupRef = useRef<string>("");
   const runMessageRef = useRef<(content: string) => Promise<void>>(
@@ -224,6 +251,10 @@ export function ChatScreen({ navigation, route }: Props) {
   }, [liveTrace]);
 
   useEffect(() => {
+    pendingRequestsRef.current = pendingRequests;
+  }, [pendingRequests]);
+
+  useEffect(() => {
     sessionStatusRef.current = sessionStatus;
   }, [sessionStatus]);
 
@@ -263,12 +294,46 @@ export function ChatScreen({ navigation, route }: Props) {
               }
               return next;
             });
+            const requests = nativeUserInputRequests(
+              events as Parameters<typeof nativeUserInputRequests>[0],
+              sessionCode,
+            ).filter(
+              (request) => !answeredRequestIdsRef.current.has(request.requestId),
+            );
+            setPendingRequests(requests);
           }
         })
         .catch(() => undefined);
     },
     [effectiveAssistantCode, sessionCode, sessionRequest, sessionStatus, workspaceCode],
   );
+
+  const refreshA2uiState = useCallback(async () => {
+    if (!workspaceCode || sessionStatus !== "online") return;
+    try {
+      const state = await sessionRequest(
+        ({ tunnel }) =>
+          getChatA2uiState({
+            tunnel,
+            sessionCode,
+            workspaceCode,
+            assistantCode: effectiveAssistantCode,
+          }),
+        { retry: false },
+      );
+      if (!state || !mountedRef.current) return;
+      a2uiSessionRef.current.hydrate(state as unknown as ChatA2uiState);
+      setA2uiRevision((value) => value + 1);
+    } catch {
+      // Older nodes do not expose A2UI state; display-only surfaces still work.
+    }
+  }, [
+    effectiveAssistantCode,
+    sessionCode,
+    sessionRequest,
+    sessionStatus,
+    workspaceCode,
+  ]);
 
   const loadMessages = useCallback(
     async (showSpinner: boolean) => {
@@ -291,6 +356,7 @@ export function ChatScreen({ navigation, route }: Props) {
         setMessages(next);
         setError(null);
         refreshProtocolEvents(sequence);
+        void refreshA2uiState();
       } catch (loadError) {
         if (sequence !== messagesSeqRef.current) return;
         if (!isAbortError(loadError)) setError(describeError(loadError));
@@ -300,6 +366,7 @@ export function ChatScreen({ navigation, route }: Props) {
     },
     [
       effectiveAssistantCode,
+      refreshA2uiState,
       refreshProtocolEvents,
       sessionCode,
       sessionRequest,
@@ -331,8 +398,17 @@ export function ChatScreen({ navigation, route }: Props) {
     setActiveRunId(null);
     queuedRef.current = [];
     setQueued([]);
+    setPendingRequests([]);
+    setAnswering(false);
+    answeredRequestIdsRef.current = new Set();
+    a2uiBusyRef.current = false;
+    setA2uiRevision((value) => value + 1);
     setLoading(sessionStatus !== "offline");
   }, [contentEpoch, sessionCode, sessionStatus]);
+
+  useEffect(() => {
+    a2uiSessionRef.current = a2uiSession;
+  }, [a2uiSession]);
 
   // Reconnects reload the transcript in place instead of clearing it.
   useEffect(() => {
@@ -460,8 +536,21 @@ export function ChatScreen({ navigation, route }: Props) {
                   setActiveRunId(
                     typeof event.runId === "string" ? event.runId : null,
                   );
-                } else if (type === "RUN_FINISHED" || type === "RUN_ERROR") {
+                  setPendingRequests([]);
+                } else if (type === "RUN_FINISHED") {
                   setActiveRunId(null);
+                  const requests = nativeUserInputRequests(
+                    [event as Parameters<typeof nativeUserInputRequests>[0][number]],
+                    sessionCode,
+                  ).filter(
+                    (request) =>
+                      !answeredRequestIdsRef.current.has(request.requestId),
+                  );
+                  setPendingRequests(requests);
+                  void refreshA2uiState();
+                } else if (type === "RUN_ERROR") {
+                  setActiveRunId(null);
+                  setPendingRequests([]);
                 }
                 const nextTrace = reduceRunTrace(
                   liveTraceRef.current,
@@ -540,7 +629,8 @@ export function ChatScreen({ navigation, route }: Props) {
         if (
           mountedRef.current &&
           !controller.signal.aborted &&
-          sessionStatusRef.current === "online"
+          sessionStatusRef.current === "online" &&
+          pendingRequestsRef.current.length === 0
         ) {
           const [nextQueued, ...rest] = queuedRef.current;
           if (nextQueued) {
@@ -553,6 +643,7 @@ export function ChatScreen({ navigation, route }: Props) {
     },
     [
       effectiveAssistantCode,
+      refreshA2uiState,
       reloadMessages,
       reportRequestError,
       sessionCode,
@@ -570,13 +661,25 @@ export function ChatScreen({ navigation, route }: Props) {
   const handleSend = useCallback(() => {
     const content = input.trim();
     if (!content || sendingRef.current) return;
+    if (pendingRequests.length > 0 || answering) {
+      setNotice(t("请先完成上面的回答"));
+      return;
+    }
     if (!workspaceCode || sessionStatus !== "online") {
       setError(t("连接信息缺失或电脑离线，请返回重新连接节点"));
       return;
     }
     setInput("");
     void runMessage(content);
-  }, [input, runMessage, sessionStatus, t, workspaceCode]);
+  }, [
+    answering,
+    input,
+    pendingRequests.length,
+    runMessage,
+    sessionStatus,
+    t,
+    workspaceCode,
+  ]);
 
   const handleSteer = useCallback(async () => {
     const content = input.trim();
@@ -656,10 +759,206 @@ export function ChatScreen({ navigation, route }: Props) {
     }
   }, [activeRunId, effectiveAssistantCode, sessionCode, sessionRequest, t]);
 
+  const applyInteractionEvents = useCallback(
+    (events: AgUiEvent[]) => {
+      if (!events.length) return;
+      setTraces((previous) => {
+        const next = new Map(previous);
+        for (const [runId, trace] of buildRunTraces(events)) {
+          next.set(runId, trace);
+        }
+        return next;
+      });
+      const requests = nativeUserInputRequests(
+        events as Parameters<typeof nativeUserInputRequests>[0],
+        sessionCode,
+      ).filter(
+        (request) => !answeredRequestIdsRef.current.has(request.requestId),
+      );
+      setPendingRequests(requests);
+    },
+    [sessionCode],
+  );
+
+  const handleAnswer = useCallback(
+    async (request: ChatUserInputRequest, answers: ChatUserInputAnswer[]) => {
+      if (!request || answering) return;
+      const approval =
+        request.nativeInteraction?.reason === "approval_required" ||
+        (request.nativeInteraction?.responseSchema as { type?: string } | undefined)
+          ?.type === "boolean";
+      let requests = [request];
+      let finalAnswers = answers;
+      if (approval) {
+        const selected = answers.find(
+          (answer) =>
+            answer.questionId === request.requestId &&
+            answer.answerKind === "Option",
+        );
+        const payload = selected?.optionId
+          ? request.nativeInteraction?.optionPayloads[selected.optionId]
+          : undefined;
+        const group = pendingApprovalRequests(request, pendingRequests);
+        const decisions =
+          typeof payload === "boolean"
+            ? batchApprovalDecisions(group, payload)
+            : null;
+        if (decisions && group.length > 1) {
+          requests = group;
+          finalAnswers = Object.values(decisions).flat();
+        }
+      }
+      let input;
+      try {
+        input = nativeUserInputBatchAnswer(requests, finalAnswers);
+      } catch (answerError) {
+        setError(describeError(answerError));
+        return;
+      }
+      setAnswering(true);
+      const answeredIds = new Set(requests.map((item) => item.requestId));
+      answeredIds.forEach((id) => answeredRequestIdsRef.current.add(id));
+      setPendingRequests((previous) =>
+        previous.filter((item) => !answeredIds.has(item.requestId)),
+      );
+      try {
+        const events = await sessionRequest(
+          ({ tunnel }) =>
+            answerChatUserInput({
+              tunnel,
+              sessionCode,
+              workspaceCode,
+              assistantCode: effectiveAssistantCode,
+              requestCode: request.requestId,
+              answers: input.answers,
+              resume: input.resume,
+              a2uiMetadata: input.a2uiMetadata,
+            }),
+          { retry: false },
+        );
+        if (!mountedRef.current) return;
+        applyInteractionEvents(events);
+        await reloadMessages();
+        void refreshA2uiState();
+      } catch (answerError) {
+        answeredIds.forEach((id) => answeredRequestIdsRef.current.delete(id));
+        setPendingRequests((previous) => [
+          ...requests.filter(
+            (item) => !previous.some((entry) => entry.requestId === item.requestId),
+          ),
+          ...previous,
+        ]);
+        if (!isAbortError(answerError)) {
+          reportRequestError(answerError);
+          setError(describeError(answerError));
+        }
+      } finally {
+        if (mountedRef.current) setAnswering(false);
+      }
+    },
+    [
+      answering,
+      applyInteractionEvents,
+      effectiveAssistantCode,
+      pendingRequests,
+      refreshA2uiState,
+      reloadMessages,
+      reportRequestError,
+      sessionCode,
+      sessionRequest,
+      workspaceCode,
+    ],
+  );
+
+  const handleA2UIAction = useCallback<ChatA2uiActionHandler>(
+    (message, metadata, context) => {
+      const surface = context?.surface;
+      if (!surface || a2uiBusyRef.current) return;
+      a2uiBusyRef.current = true;
+      const actionId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      void (async () => {
+        try {
+          const events = await sessionRequest(
+            ({ tunnel }) =>
+              runChatA2uiAction({
+                tunnel,
+                sessionCode,
+                workspaceCode,
+                assistantCode: effectiveAssistantCode,
+                actionId,
+                surfaceInstanceId: surface.surfaceInstanceId,
+                expectedRevision: surface.revision,
+                message,
+                metadata,
+              }),
+            { retry: false },
+          );
+          if (!mountedRef.current) return;
+          applyInteractionEvents(events);
+          await reloadMessages();
+          void refreshA2uiState();
+        } catch (actionError) {
+          if (!isAbortError(actionError)) {
+            reportRequestError(actionError);
+            setError(describeError(actionError));
+          }
+        } finally {
+          a2uiBusyRef.current = false;
+        }
+      })();
+    },
+    [
+      applyInteractionEvents,
+      effectiveAssistantCode,
+      refreshA2uiState,
+      reloadMessages,
+      reportRequestError,
+      sessionCode,
+      sessionRequest,
+      workspaceCode,
+    ],
+  );
+
+  const userInputLabels = useMemo<ChatUserInputLabels>(
+    () => ({
+      ariaLabel: t("助手提问"),
+      progress: (current, total) =>
+        format("第 {current} / {total} 题", { current, total }),
+      back: t("上一步"),
+      next: t("下一步"),
+      continue: t("继续"),
+      continuing: t("继续中…"),
+      otherOptionLabel: t("其他"),
+      otherOptionDescription: t("输入自定义回答"),
+      skipOptionLabel: t("跳过"),
+      skipOptionDescription: t("跳过此问题"),
+      otherAnswerPlaceholder: t("输入你的答案"),
+      otherAnswerAriaLabel: (index) =>
+        format("其他答案（第 {index} 题）", { index }),
+      approve: t("批准"),
+      reject: t("拒绝"),
+      approved: t("已批准"),
+      rejected: t("已拒绝"),
+      approvalTitle: t("批准工具执行"),
+      approvalExecution: t("执行"),
+      approvalDirectory: t("工作目录"),
+      approvalParameters: t("全部参数"),
+      approvalReason: t("为什么需要批准"),
+      approvalScope: t("仅对本次调用生效"),
+      approvalMissingDetails: t("执行详情未提供"),
+    }),
+    [format, t],
+  );
+
   const horizontalPadding = 20;
   const offline = sessionStatus === "offline";
   const canSend =
-    Boolean(input.trim()) && !sending && !loading && sessionStatus === "online";
+    Boolean(input.trim()) &&
+    !sending &&
+    !answering &&
+    pendingRequests.length === 0 &&
+    !loading &&
+    sessionStatus === "online";
   const canSteer = Boolean(input.trim()) && sending && Boolean(activeRunId);
   const canQueue = Boolean(input.trim()) && sending;
 
@@ -768,7 +1067,7 @@ export function ChatScreen({ navigation, route }: Props) {
               <FlatList
                 ref={listRef}
                 data={messages}
-                extraData={traces}
+                extraData={[traces, a2uiRevision, pendingRequests]}
                 keyExtractor={(item) => String(item.messageCode ?? item.id)}
                 renderItem={({ item }) => {
                   const trace =
@@ -791,11 +1090,14 @@ export function ChatScreen({ navigation, route }: Props) {
                         </View>
                       ) : null}
                       <AgentMessageBubble
+                        key={`${item.messageCode ?? item.id}:${a2uiRevision}`}
                         message={toAgentMessage(
                           item,
                           sessionCode,
                           assistantName,
                         )}
+                        onA2UIAction={handleA2UIAction}
+                        runtime={a2uiSession}
                         showIdentity={item.role === "ASSISTANT"}
                         theme={agentTheme}
                       />
@@ -855,6 +1157,27 @@ export function ChatScreen({ navigation, route }: Props) {
                 keyboardDismissMode="interactive"
                 showsVerticalScrollIndicator={false}
               />
+
+              {pendingRequests.length ? (
+                <View
+                  style={{
+                    maxHeight: "45%",
+                    paddingBottom: 8,
+                    paddingHorizontal: horizontalPadding,
+                  }}
+                >
+                  {pendingRequests.map((request) => (
+                    <ApprovalCard
+                      key={request.requestId}
+                      labels={userInputLabels}
+                      onSubmit={(answers) => void handleAnswer(request, answers)}
+                      pending={answering}
+                      request={request}
+                      theme={agentTheme}
+                    />
+                  ))}
+                </View>
+              ) : null}
 
               <View
                 style={[
