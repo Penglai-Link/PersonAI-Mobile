@@ -21,13 +21,13 @@ PersonAI Mobile 是 Person-AI 生态的开源移动客户端。它把你在电�
 <p align="center">
   <img src="docs/screenshots/dashboard.png" width="220" alt="跨节点看板">
   <img src="docs/screenshots/drawer-session-tree.png" width="220" alt="按产品、节点和会话组织的侧滑菜单">
-  <img src="docs/screenshots/chat-dude.png" width="220" alt="与 Dude 的流式对话">
+  <img src="docs/screenshots/chat-personai.png" width="220" alt="与个人助手的流式对话">
 </p>
-<p align="center"><sub>跨节点看板 · 产品、节点与会话 · 与 Dude 的对话（中文界面，演示数据）</sub></p>
+<p align="center"><sub>跨节点看板 · 产品、节点与会话 · 与个人助手的对话（中文界面，演示数据）</sub></p>
 
 ## 一块看板，看到所有节点
 
-首页汇总所有产品和节点：产品数量、在线节点、会话总数、运行中的任务，以及来自不同节点的 Dude 卡片。
+首页汇总所有产品和节点：产品数量、在线节点、会话总数、运行中的任务，以及来自不同节点的个人助手卡片。
 
 不用先选一台电脑，一台机器离线也不会遮住其它机器的信息。点开会话时才连接对应节点，看板本身不会打断你正在进行的对话。
 
@@ -94,10 +94,10 @@ PersonAI Mobile 是 Person-AI 生态的开源移动客户端。它把你在电�
 
 | 产品 | 编码 | 手机上的能力 |
 | --- | --- | --- |
-| Tron Harness | `tron` | 主题、工作区和随聊分组，Dude，工作空间，流式会话 |
-| 运维智能体 | `axiom-agent` | 会话、工作空间和 Dude 汇总 |
-| 小说智能体 | `novel-agent` | 会话、工作空间和 Dude 汇总 |
-| GitDeck | `git-deck` | 会话、工作空间和 Dude 汇总 |
+| Tron Harness | `tron` | 主题、工作区和随聊分组，个人助手，工作空间，流式会话 |
+| 运维智能体 | `axiom-agent` | 会话、工作空间和个人助手汇总 |
+| 小说智能体 | `novel-agent` | 会话、工作空间和个人助手汇总 |
+| GitDeck | `git-deck` | 会话、工作空间和个人助手汇总 |
 | 自定义产品 | 小写字母、数字、`.` 或 `-` | 单层会话列表，可随时添加或删除 |
 
 ## 开始使用

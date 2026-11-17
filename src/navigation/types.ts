@@ -12,8 +12,8 @@ export type RootStackParamList = {
   Chat: {
     session: ChatSession;
     workspaceCode: string;
-    dudeCode?: string | null;
-    dudeName?: string | null;
+    assistantCode?: string | null;
+    assistantName?: string | null;
   };
   /** Mobile theme, language and product definitions. */
   Settings: undefined;

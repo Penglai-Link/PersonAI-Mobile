@@ -11,7 +11,7 @@ import { useCallback, useMemo, useState } from "react";
 import { PanResponder, Platform, StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
-import type { ChatSession } from "./api/tron";
+import { ASSISTANT_SOURCE_TYPE, type ChatSession } from "./api/tron";
 import { LanguageProvider } from "./i18n";
 import { AppDrawer, DrawerProvider, useDrawer } from "./navigation/Drawer";
 import type { RootStackParamList } from "./navigation/types";
@@ -114,13 +114,13 @@ function AppNavigator() {
       closeDrawer();
       selectNode(node);
       if (!navigationRef.isReady()) return;
-      const isDude =
-        (session.sourceType ?? "").toUpperCase() === "DUDE";
+      const isAssistant =
+        (session.sourceType ?? "").toUpperCase() === ASSISTANT_SOURCE_TYPE;
       navigationRef.navigate("Chat", {
         session,
         workspaceCode: workspaceCode || session.workspaceCode || "",
-        dudeCode: isDude ? (session.sourceCode ?? null) : null,
-        dudeName: null,
+        assistantCode: isAssistant ? (session.sourceCode ?? null) : null,
+        assistantName: null,
       });
     },
     [closeDrawer, navigationRef, selectNode],

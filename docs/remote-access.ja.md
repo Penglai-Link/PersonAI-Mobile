@@ -74,9 +74,9 @@ Tron 製品 API（`tron.*` 名前空間）：
 
 ```text
 tron.workspaces.list
-tron.dudes.list
-tron.dudes.mainSession
-tron.dudes.createSession
+tron.assistants.list
+tron.assistants.mainSession
+tron.assistants.createSession
 tron.projects.list
 tron.directories.list
 tron.session.groups

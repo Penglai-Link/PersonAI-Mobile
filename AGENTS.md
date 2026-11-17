@@ -30,7 +30,7 @@ PersonAI Mobile 的 Expo + React Native 移动端，目录与 Tron 主仓库同�
   栈必须保持 `gestureEnabled: false`，让侧滑菜单独占左缘手势；返回统一用 `AppHeader onBack`。
   设置页集中主题、语言与产品定义，不要在其它页面另开入口。
 - 默认首页是看板（`src/screens/DashboardScreen.tsx`）：产品/节点/会话/运行中指标、跨节点
-  Dude、运行中会话。看板通过 `loadNodeOverview` 汇总每个节点，不要为汇总切换当前节点。
+  个人助手、运行中会话。看板通过 `loadNodeOverview` 汇总每个节点，不要为汇总切换当前节点。
 - 侧滑菜单会话树：只展示有节点的产品，结构为产品 → 节点 → 工作空间 → 一级分组 →
   二级分组 → 会话。一级分组来自产品返回的导航菜单（`tron.navigation.menus`，
   Tron 为 主题 / 工作区 / 随聊），二级分组来自项目/目录数据；不得写死分组名称和顺序。

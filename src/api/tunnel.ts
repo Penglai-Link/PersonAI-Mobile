@@ -971,6 +971,17 @@ export class SecureTunnel {
     this.armTimer(pending);
   }
 
+  /**
+   * Extends every stream's idle timer. Called on `pong`, so the idle timeout
+   * only measures "the node stopped answering" rather than "this run has not
+   * emitted an event yet".
+   */
+  private keepStreamsAlive(): void {
+    for (const pending of this.pending.values()) {
+      if (pending.kind === "stream") this.touch(pending);
+    }
+  }
+
   private notifyFrameWaiters(): void {
     const now = Date.now();
     for (const waiter of [...this.frameWaiters]) {
@@ -1035,6 +1046,11 @@ export class SecureTunnel {
         }
         return;
       case "pong":
+        // A heartbeat reply proves the channel is alive even when a stream is
+        // waiting on a silent run (long tool step, slow model). Without this a
+        // quiet-but-healthy run would hit the stream idle timeout and look
+        // exactly like a dropped connection.
+        this.keepStreamsAlive();
         return;
       case "fragment":
         this.handleFragment(envelope);
@@ -1368,13 +1384,14 @@ export class SecureTunnelPool {
   ): Promise<VerifiedTunnel> {
     const cached = this.liveTunnelFor(target);
     if (cached) {
-      try {
-        const latencyMs = await cached.ping(timeoutMs);
-        return { tunnel: cached, latencyMs };
-      } catch {
-        cached.close();
-        this.dropTunnel(cached);
-      }
+      // One missed heartbeat is not proof the channel is dead (slow link, busy
+      // JS thread). Retry once before dropping a tunnel that still works.
+      const first = await this.pingTunnel(cached, timeoutMs);
+      if (first.ok) return { tunnel: cached, latencyMs: first.latencyMs };
+      const second = await this.pingTunnel(cached, timeoutMs);
+      if (second.ok) return { tunnel: cached, latencyMs: second.latencyMs };
+      cached.close();
+      this.dropTunnel(cached);
     }
 
     let lastError: unknown = null;
@@ -1387,16 +1404,14 @@ export class SecureTunnelPool {
           { ...target, ...endpoint },
           handshakeTimeoutFor(endpoint),
         );
-        let latencyMs: number;
-        try {
-          latencyMs = await tunnel.ping(timeoutMs);
-        } catch (error) {
+        const verified = await this.pingTunnel(tunnel, timeoutMs);
+        if (!verified.ok) {
           tunnel.close();
           this.dropTunnel(tunnel);
-          throw error;
+          throw tunnelError("TUNNEL_HEARTBEAT_TIMEOUT", translate("节点没有响应心跳"));
         }
         this.noteEndpointSuccess(target, endpoint);
-        return { tunnel, latencyMs };
+        return { tunnel, latencyMs: verified.latencyMs };
       } catch (error) {
         this.noteEndpointFailure(target, endpoint);
         lastError = error;
@@ -1406,10 +1421,22 @@ export class SecureTunnelPool {
     throw tunnelError("TUNNEL_CLOSED", translate("节点没有可用地址"));
   }
 
+  /** One heartbeat round trip; failures are values, not exceptions. */
+  private async pingTunnel(
+    tunnel: SecureTunnel,
+    timeoutMs: number,
+  ): Promise<{ ok: boolean; latencyMs: number }> {
+    try {
+      return { ok: true, latencyMs: await tunnel.ping(timeoutMs) };
+    } catch {
+      return { ok: false, latencyMs: 0 };
+    }
+  }
+
   /** Probes candidates and returns the first reachable endpoint. */
   async probeNode(
     target: TunnelTarget,
-    timeoutMs = 1_200,
+    timeoutMs = 3_000,
   ): Promise<TunnelEndpoint | null> {
     try {
       const { tunnel } = await this.connectVerified(
@@ -1424,7 +1451,7 @@ export class SecureTunnelPool {
   }
 
   async probe(target: TunnelTarget, timeoutMs = 5_000): Promise<boolean> {
-    return (await this.probeNode(target, Math.min(timeoutMs, 1_500))) !== null;
+    return (await this.probeNode(target, Math.min(timeoutMs, 3_000))) !== null;
   }
 
   /** Acquires a tunnel and verifies it with a heartbeat round trip. */

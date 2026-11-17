@@ -13,14 +13,15 @@ import {
 } from "react-native";
 
 import {
-  createDudeSession,
-  createMainDudeSession,
+  ASSISTANT_SOURCE_TYPE,
+  createAssistantSession,
+  createMainAssistantSession,
   type ChatSession,
-  type Dude,
+  type Assistant,
 } from "../api/tron";
 import { AppHeader } from "../components/AppHeader";
 import { Badge } from "../components/Badge";
-import { DudeCard } from "../components/DudeCard";
+import { AssistantCard } from "../components/AssistantCard";
 import { EmptyState } from "../components/EmptyState";
 import { InlineBanner } from "../components/InlineBanner";
 import { Screen } from "../components/Screen";
@@ -47,14 +48,14 @@ type Props = NativeStackScreenProps<RootStackParamList, "Dashboard">;
 interface NodeSummary {
   node: SavedNode;
   sessions: ChatSession[];
-  dudes: Dude[];
+  assistants: Assistant[];
   defaultWorkspaceCode: string | null;
   error: string | null;
 }
 
-interface DashboardDude {
+interface DashboardAssistant {
   node: SavedNode;
-  dude: Dude;
+  assistant: Assistant;
   workspaceCode: string;
 }
 
@@ -87,7 +88,9 @@ export function DashboardScreen({ navigation }: Props) {
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [openingDudeKey, setOpeningDudeKey] = useState<string | null>(null);
+  const [openingAssistantKey, setOpeningAssistantKey] = useState<string | null>(
+    null,
+  );
   const [actionError, setActionError] = useState<string | null>(null);
 
   const nodesRef = useRef<SavedNode[]>(nodes);
@@ -133,7 +136,7 @@ export function DashboardScreen({ navigation }: Props) {
               sessions: overview.workspaces.flatMap(
                 (workspace) => workspace.sessions,
               ),
-              dudes: overview.dudes,
+              assistants: overview.assistants,
               defaultWorkspaceCode: overview.defaultWorkspaceCode,
               error: null,
             };
@@ -141,7 +144,7 @@ export function DashboardScreen({ navigation }: Props) {
             return {
               node,
               sessions: [],
-              dudes: [],
+              assistants: [],
               defaultWorkspaceCode: null,
               error: describeError(error),
             };
@@ -225,30 +228,30 @@ export function DashboardScreen({ navigation }: Props) {
     );
   }, [summaries]);
 
-  const dudes = useMemo<DashboardDude[]>(() => {
-    const result: DashboardDude[] = [];
+  const assistants = useMemo<DashboardAssistant[]>(() => {
+    const result: DashboardAssistant[] = [];
     for (const summary of Object.values(summaries)) {
       if (!summary.defaultWorkspaceCode) continue;
-      for (const dude of summary.dudes) {
+      for (const assistant of summary.assistants) {
         result.push({
           node: summary.node,
-          dude,
+          assistant,
           workspaceCode: summary.defaultWorkspaceCode,
         });
       }
     }
     return result.sort((left, right) => {
-      const main = Number(right.dude.isMain) - Number(left.dude.isMain);
+      const main = Number(right.assistant.isMain) - Number(left.assistant.isMain);
       if (main !== 0) return main;
       return left.node.name.localeCompare(right.node.name);
     });
   }, [summaries]);
 
-  // Dudes belong to a node. With more than one node contributing, a flat list
-  // hides where each Dude lives, so group by node and show the node header.
-  const dudeGroups = useMemo(() => {
-    const byNode = new Map<string, DashboardDude[]>();
-    for (const item of dudes) {
+  // Assistants belong to a node. With more than one node contributing, a flat
+  // list hides where each one lives, so group by node and show its header.
+  const assistantGroups = useMemo(() => {
+    const byNode = new Map<string, DashboardAssistant[]>();
+    for (const item of assistants) {
       const list = byNode.get(item.node.id) ?? [];
       list.push(item);
       byNode.set(item.node.id, list);
@@ -256,32 +259,33 @@ export function DashboardScreen({ navigation }: Props) {
     return [...byNode.values()]
       .map((items) =>
         [...items].sort((left, right) => {
-          const main = Number(right.dude.isMain) - Number(left.dude.isMain);
+          const main =
+            Number(right.assistant.isMain) - Number(left.assistant.isMain);
           if (main !== 0) return main;
-          return left.dude.name.localeCompare(right.dude.name);
+          return left.assistant.name.localeCompare(right.assistant.name);
         }),
       )
       .sort((left, right) =>
         left[0].node.name.localeCompare(right[0].node.name),
       );
-  }, [dudes]);
+  }, [assistants]);
 
-  const openDude = useCallback(
-    async (item: DashboardDude) => {
-      if (!item.dude.enabled || openingDudeKey) return;
-      const key = `${item.node.id}:${item.dude.dudeCode}`;
-      setOpeningDudeKey(key);
+  const openAssistant = useCallback(
+    async (item: DashboardAssistant) => {
+      if (!item.assistant.enabled || openingAssistantKey) return;
+      const key = `${item.node.id}:${item.assistant.assistantCode}`;
+      setOpeningAssistantKey(key);
       setActionError(null);
       try {
         const session = await requestForNode(item.node, ({ tunnel }) =>
-          item.dude.isMain
-            ? createMainDudeSession({
+          item.assistant.isMain
+            ? createMainAssistantSession({
                 tunnel,
                 workspaceCode: item.workspaceCode,
               })
-            : createDudeSession({
+            : createAssistantSession({
                 tunnel,
-                dudeCode: item.dude.dudeCode,
+                assistantCode: item.assistant.assistantCode,
                 workspaceCode: item.workspaceCode,
               }),
         );
@@ -290,16 +294,16 @@ export function DashboardScreen({ navigation }: Props) {
           session,
           workspaceCode:
             session.workspaceCode ?? item.workspaceCode ?? "",
-          dudeCode: item.dude.dudeCode,
-          dudeName: item.dude.name,
+          assistantCode: item.assistant.assistantCode,
+          assistantName: item.assistant.name,
         });
       } catch (error) {
         setActionError(describeError(error));
       } finally {
-        setOpeningDudeKey(null);
+        setOpeningAssistantKey(null);
       }
     },
-    [navigation, openingDudeKey, requestForNode, selectNode],
+    [navigation, openingAssistantKey, requestForNode, selectNode],
   );
 
   const sessionsPending = loading || (nodes.length > 0 && !loaded);
@@ -307,13 +311,13 @@ export function DashboardScreen({ navigation }: Props) {
   const openSession = useCallback(
     (item: RunningSession) => {
       selectNode(item.node);
-      const isDude =
-        (item.session.sourceType ?? "").toUpperCase() === "DUDE";
+      const isAssistant =
+        (item.session.sourceType ?? "").toUpperCase() === ASSISTANT_SOURCE_TYPE;
       navigation.navigate("Chat", {
         session: item.session,
         workspaceCode: item.workspaceCode || item.session.workspaceCode || "",
-        dudeCode: isDude ? (item.session.sourceCode ?? null) : null,
-        dudeName: null,
+        assistantCode: isAssistant ? (item.session.sourceCode ?? null) : null,
+        assistantName: null,
       });
     },
     [navigation, selectNode],
@@ -396,42 +400,42 @@ export function DashboardScreen({ navigation }: Props) {
 
         <View style={styles.section}>
           <SectionHeader
-            title="Dude"
-            count={sessionsPending ? undefined : dudes.length}
+            title={t("个人助手")}
+            count={sessionsPending ? undefined : assistants.length}
           />
           {sessionsPending ? (
             <View style={styles.loadingRow}>
               <ActivityIndicator size="small" color={palette.accent} />
               <Text style={styles.mutedText}>{t("正在汇总…")}</Text>
             </View>
-          ) : dudes.length === 0 ? (
-            <EmptyState bare icon="sparkles-outline" title={t("暂无 Dude")} />
-          ) : dudeGroups.length > 1 ? (
-            <View style={styles.dudeGroups}>
-              {dudeGroups.map((group) => {
+          ) : assistants.length === 0 ? (
+            <EmptyState bare icon="sparkles-outline" title={t("暂无个人助手")} />
+          ) : assistantGroups.length > 1 ? (
+            <View style={styles.assistantGroups}>
+              {assistantGroups.map((group) => {
                 const node = group[0].node;
                 return (
-                  <View key={node.id} style={styles.dudeGroup}>
-                    <View style={styles.dudeGroupHeader}>
+                  <View key={node.id} style={styles.assistantGroup}>
+                    <View style={styles.assistantGroupHeader}>
                       <StatusDot online={node.online} size={6} />
-                      <Text style={styles.dudeGroupName} numberOfLines={1}>
+                      <Text style={styles.assistantGroupName} numberOfLines={1}>
                         {node.name}
                       </Text>
-                      <Text style={styles.dudeGroupCount}>{group.length}</Text>
+                      <Text style={styles.assistantGroupCount}>{group.length}</Text>
                     </View>
                     <ScrollView
                       horizontal
                       showsHorizontalScrollIndicator={false}
-                      contentContainerStyle={styles.dudeList}
+                      contentContainerStyle={styles.assistantList}
                     >
                       {group.map((item) => {
-                        const key = `${item.node.id}:${item.dude.dudeCode}`;
+                        const key = `${item.node.id}:${item.assistant.assistantCode}`;
                         return (
-                          <DudeCard
+                          <AssistantCard
                             key={key}
-                            dude={item.dude}
-                            opening={openingDudeKey === key}
-                            onPress={() => void openDude(item)}
+                            assistant={item.assistant}
+                            opening={openingAssistantKey === key}
+                            onPress={() => void openAssistant(item)}
                           />
                         );
                       })}
@@ -444,17 +448,17 @@ export function DashboardScreen({ navigation }: Props) {
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.dudeList}
+              contentContainerStyle={styles.assistantList}
             >
-              {dudes.map((item) => {
-                const key = `${item.node.id}:${item.dude.dudeCode}`;
+              {assistants.map((item) => {
+                const key = `${item.node.id}:${item.assistant.assistantCode}`;
                 return (
-                  <DudeCard
+                  <AssistantCard
                     key={key}
-                    dude={item.dude}
+                    assistant={item.assistant}
                     context={item.node.name}
-                    opening={openingDudeKey === key}
-                    onPress={() => void openDude(item)}
+                    opening={openingAssistantKey === key}
+                    onPress={() => void openAssistant(item)}
                   />
                 );
               })}
@@ -620,29 +624,29 @@ const createStyles = (c: Palette) =>
     list: {
       gap: spacing.sm,
     },
-    dudeGroups: {
+    assistantGroups: {
       gap: spacing.lg,
     },
-    dudeGroup: {
+    assistantGroup: {
       gap: spacing.sm,
     },
-    dudeGroupHeader: {
+    assistantGroupHeader: {
       flexDirection: "row",
       alignItems: "center",
       gap: spacing.sm,
     },
-    dudeGroupName: {
+    assistantGroupName: {
       flex: 1,
       color: c.text,
       ...typography.bodyStrong,
       fontSize: 12,
     },
-    dudeGroupCount: {
+    assistantGroupCount: {
       color: c.muted,
       ...typography.caption,
       fontSize: 10,
     },
-    dudeList: {
+    assistantList: {
       gap: spacing.md,
       paddingRight: spacing.sm,
     },

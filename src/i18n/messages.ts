@@ -15,7 +15,8 @@ export const enMessages: Record<string, string> = {
   "不安全调试（非 HTTPS）": "Insecure debug (non-HTTPS)",
   "不安全调试：允许通过 http:// 连接该节点":
     "Insecure debug: allow connecting to this node over http://",
-  "主 Dude": "Main Dude",
+  "个人助手": "PersonAI",
+  "默认个人助手": "Main PersonAI",
   "主题": "Theme",
   "主题与皮肤": "Theme",
   "产品": "Products",
@@ -53,8 +54,8 @@ export const enMessages: Record<string, string> = {
     "Open the pairing QR code on your computer, or enter the node address and pairing token manually.",
   "在电脑端打开配对二维码，或手动粘贴配对链接。":
     "Open the pairing QR code on your computer, or paste a pairing link manually.",
-  "在电脑端创建 Dude 后，这里会显示可用的助手。":
-    "Dudes created on your computer will appear here.",
+  "在电脑端创建个人助手后，这里会显示可用的个人助手。":
+    "PersonAI assistants created on your computer will appear here.",
   "在电脑端创建主题后，可以在这里按主题查看会话。":
     "Topics created on your computer will group their sessions here.",
   "在线": "Online",
@@ -113,7 +114,7 @@ export const enMessages: Record<string, string> = {
   "显示令牌": "Show token",
   "显示名": "Display name",
   "显示在列表中的产品名称": "Product name shown in lists",
-  "暂无 Dude": "No Dudes yet",
+  "暂无个人助手": "No PersonAI yet",
   "未命名会话": "Untitled session",
   "未命名电脑": "Unnamed computer",
   "未连接节点": "No node connected",
@@ -124,6 +125,8 @@ export const enMessages: Record<string, string> = {
   "正在加载消息…": "Loading messages…",
   "正在加载电脑数据…": "Loading computer data…",
   "正在建立安全会话…": "Establishing a secure session…",
+  "正在重新连接电脑…": "Reconnecting to the computer…",
+  "连接中断，正在自动重连…": "Connection lost, reconnecting automatically…",
   "正在思考…": "Thinking…",
   "正在接收回复…": "Receiving reply…",
   "正在检查相机权限…": "Checking camera permission…",
@@ -149,7 +152,7 @@ export const enMessages: Record<string, string> = {
   "节点皮肤": "Node skins",
   "节点离线": "Node offline",
   "节点默认": "Node default",
-  "该 Dude 已停用": "This Dude is disabled",
+  "该个人助手已停用": "This PersonAI is disabled",
   "该会话缺少工作空间信息，请刷新后重试":
     "This session has no workspace information. Refresh and try again.",
   "该节点使用非 HTTPS 地址，配对令牌、JWT 和聊天内容会以明文在网络上传输。只应在可信局域网或临时调试环境中使用。确定继续连接？":
@@ -171,9 +174,9 @@ export const enMessages: Record<string, string> = {
   "还没有节点": "No nodes yet",
   "还没有选中节点": "No node selected",
   "还没有随聊": "No chats yet",
-  "这个 Dude 还没有描述。": "This Dude has no description yet.",
-  "这台电脑还没有可用工作空间，无法打开 Dude 会话":
-    "This computer has no available workspace, so the Dude session cannot open.",
+  "这个个人助手还没有描述。": "This PersonAI has no description yet.",
+  "这台电脑还没有可用工作空间，无法打开个人助手会话":
+    "This computer has no available workspace, so the PersonAI session cannot open.",
   "这台电脑还没有可用的工作空间。": "This computer has no available workspace.",
   "这台电脑还没有可用的工作空间，无法创建会话。":
     "This computer has no available workspace, so a chat cannot be created.",
@@ -182,7 +185,7 @@ export const enMessages: Record<string, string> = {
   "进入会话": "Open session",
   "进入该节点的会话首页，长按可删除":
     "Open this node's sessions. Long-press to delete.",
-  "进入这个 Dude 的会话": "Open this Dude's session",
+  "进入这个个人助手的会话": "Open this PersonAI's session",
   "连接中": "Connecting",
   "连接信息缺失或电脑离线，请返回重新连接节点":
     "Connection details are missing or the computer is offline. Go back and reconnect the node.",
@@ -207,7 +210,7 @@ export const enMessages: Record<string, string> = {
   "非 HTTPS（配对标记为不安全）": "Non-HTTPS (pairing marked insecure)",
   "非 HTTPS，已阻止": "Non-HTTPS, blocked",
   "验证并保存": "Verify and save",
-  "，主 Dude": ", main Dude",
+  "，默认个人助手": ", main PersonAI",
 
   // Drawer and settings (added with the app shell).
   "移动端偏好、语言与产品定义":
@@ -315,6 +318,11 @@ export const enMessages: Record<string, string> = {
   "二维码中的产品编码无效": "The pairing QR code has an invalid product code.",
   "二维码中的参数编码无效": "The pairing QR code has invalid parameter encoding.",
   "二维码缺少节点地址": "The pairing QR code is missing the node address.",
+  "二维码中的公网地址无效":
+    "The pairing QR code has an invalid public address.",
+  "二维码中的局域网地址无效":
+    "The pairing QR code has an invalid LAN address.",
+  "节点没有可用地址": "The node has no usable address.",
   "二维码缺少配对令牌": "The pairing QR code is missing the pairing token.",
   "产品显示名不能超过 60 个字符": "The display name cannot exceed 60 characters.",
   "产品编码只能包含小写字母、数字、点和连字符":
@@ -337,7 +345,7 @@ export const enMessages: Record<string, string> = {
   "服务器返回了无法解析的响应": "The server returned an unreadable response.",
   "流式回复长时间没有响应": "The streaming reply stopped responding.",
   "流式连接意外结束，请重试": "The stream ended unexpectedly. Try again.",
-  "电脑没有返回有效的 Dude 会话": "The computer did not return a valid Dude session.",
+  "电脑没有返回有效的个人助手会话": "The computer did not return a valid PersonAI session.",
   "电脑没有返回有效的新会话": "The computer did not return a valid new session.",
   "电脑没有返回有效的访问令牌": "The computer did not return a valid access token.",
   "电脑返回的 identity 信息不完整": "The computer returned incomplete identity information.",

@@ -1,14 +1,14 @@
 import {
   TRON_PRODUCT_CODE,
   listDirectories,
-  listDudes,
+  listAssistants,
   listNavigationMenus,
   listProjects,
   listSessionGroups,
   listWorkspaceOptions,
   type ChatSession,
   type DirectoryRecord,
-  type Dude,
+  type Assistant,
   type NavigationMenu,
   type ProjectRecord,
   type WorkspaceOption,
@@ -31,8 +31,8 @@ export interface NodeWorkspaceOverview {
 
 export interface NodeOverview {
   workspaces: NodeWorkspaceOverview[];
-  /** Dudes are node-scoped; the list is not repeated per workspace. */
-  dudes: Dude[];
+  /** Assistants are node-scoped; the list is not repeated per workspace. */
+  assistants: Assistant[];
   /** First active workspace, used as the default for new sessions. */
   defaultWorkspaceCode: string | null;
   /** Product-defined chat sections, in product order. */
@@ -132,7 +132,7 @@ export async function loadNodeOverview(
     if (!visibleWorkspaces.length) {
       return {
         workspaces: [],
-        dudes: [],
+        assistants: [],
         defaultWorkspaceCode: null,
         menus: [],
       };
@@ -141,7 +141,7 @@ export async function loadNodeOverview(
     const isTronProduct = node.productCode === TRON_PRODUCT_CODE;
     const includeCatalog = isTronProduct && options.includeCatalog === true;
 
-    const [loadedWorkspaces, dudes, menus] = await Promise.all([
+    const [loadedWorkspaces, assistants, menus] = await Promise.all([
       mapWithConcurrency(
         visibleWorkspaces,
         WORKSPACE_FETCH_CONCURRENCY,
@@ -174,7 +174,7 @@ export async function loadNodeOverview(
           );
         },
       ),
-      listDudes({
+      listAssistants({
         tunnel,
         workspaceCode: defaultWorkspaceCode ?? undefined,
       }).catch(() => []),
@@ -185,7 +185,7 @@ export async function loadNodeOverview(
 
     return {
       workspaces: loadedWorkspaces,
-      dudes,
+      assistants,
       defaultWorkspaceCode,
       menus,
     };

@@ -6,7 +6,7 @@ import {
   View,
 } from "react-native";
 
-import type { Dude } from "../api/tron";
+import type { Assistant } from "../api/tron";
 import { useI18n } from "../i18n";
 import {
   radius,
@@ -19,37 +19,41 @@ import {
 import { Badge } from "./Badge";
 import { Ionicons } from "./icons";
 
-interface DudeCardProps {
-  dude: Dude;
+interface AssistantCardProps {
+  assistant: Assistant;
   opening: boolean;
   onPress: () => void;
   /** Node/product context when the dashboard aggregates multiple nodes. */
   context?: string;
 }
 
-export function DudeCard({
-  dude,
+export function AssistantCard({
+  assistant,
   opening,
   onPress,
   context,
-}: DudeCardProps) {
+}: AssistantCardProps) {
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
   const { t } = useI18n();
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${dude.name}${dude.isMain ? t("，主 Dude") : ""}`}
+      accessibilityLabel={`${assistant.name}${
+        assistant.isMain ? t("，默认个人助手") : ""
+      }`}
       accessibilityHint={
-        dude.enabled ? t("进入这个 Dude 的会话") : t("该 Dude 已停用")
+        assistant.enabled
+          ? t("进入这个个人助手的会话")
+          : t("该个人助手已停用")
       }
-      accessibilityState={{ disabled: !dude.enabled, busy: opening }}
-      disabled={!dude.enabled || opening}
+      accessibilityState={{ disabled: !assistant.enabled, busy: opening }}
+      disabled={!assistant.enabled || opening}
       onPress={onPress}
       style={({ pressed }) => [
         styles.card,
-        dude.isMain && styles.cardMain,
-        !dude.enabled && styles.disabled,
+        assistant.isMain && styles.cardMain,
+        !assistant.enabled && styles.disabled,
         pressed && styles.pressed,
       ]}
     >
@@ -58,12 +62,14 @@ export function DudeCard({
           <Ionicons name="sparkles" size={16} color={palette.accent} />
         </View>
         <View style={styles.badges}>
-          {dude.isMain ? <Badge label={t("主 Dude")} tone="accent" /> : null}
-          {!dude.enabled ? <Badge label={t("已停用")} tone="danger" /> : null}
+          {assistant.isMain ? (
+            <Badge label={t("默认个人助手")} tone="accent" />
+          ) : null}
+          {!assistant.enabled ? <Badge label={t("已停用")} tone="danger" /> : null}
         </View>
       </View>
       <Text style={styles.name} numberOfLines={1}>
-        {dude.name}
+        {assistant.name}
       </Text>
       {context ? (
         <Text style={styles.context} numberOfLines={1}>
@@ -71,15 +77,15 @@ export function DudeCard({
         </Text>
       ) : null}
       <Text style={styles.description} numberOfLines={3}>
-        {dude.description?.trim() || t("这个 Dude 还没有描述。")}
+        {assistant.description?.trim() || t("这个个人助手还没有描述。")}
       </Text>
       <View style={styles.footer}>
         <Text style={styles.footerText} numberOfLines={1}>
-          {dude.enabled ? t("进入会话") : t("已停用")}
+          {assistant.enabled ? t("进入会话") : t("已停用")}
         </Text>
         {opening ? (
           <ActivityIndicator size="small" color={palette.accent} />
-        ) : dude.enabled ? (
+        ) : assistant.enabled ? (
           <Ionicons name="arrow-forward" size={14} color={palette.accent} />
         ) : null}
       </View>

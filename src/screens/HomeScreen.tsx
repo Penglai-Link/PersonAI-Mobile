@@ -13,11 +13,12 @@ import {
 } from "react-native";
 
 import {
+  ASSISTANT_SOURCE_TYPE,
   createChatSession,
-  createDudeSession,
-  createMainDudeSession,
+  createAssistantSession,
+  createMainAssistantSession,
   listDirectories,
-  listDudes,
+  listAssistants,
   listNavigationMenus,
   listProjects,
   listSessionGroups,
@@ -25,7 +26,7 @@ import {
   type ChatSession,
   type ChatSessionGroup,
   type DirectoryRecord,
-  type Dude,
+  type Assistant,
   type NavigationMenu,
   type ProjectRecord,
   type WorkspaceOption,
@@ -34,7 +35,7 @@ import { AppHeader } from "../components/AppHeader";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
 import { Card } from "../components/Card";
-import { DudeCard } from "../components/DudeCard";
+import { AssistantCard } from "../components/AssistantCard";
 import { EmptyState } from "../components/EmptyState";
 import { InlineBanner } from "../components/InlineBanner";
 import { LoadingView } from "../components/LoadingView";
@@ -88,7 +89,7 @@ export function HomeScreen({ navigation }: Props) {
   const { width } = useWindowDimensions();
   const wide = width >= layout.wideBreakpoint;
 
-  const [dudes, setDudes] = useState<Dude[]>([]);
+  const [assistants, setAssistants] = useState<Assistant[]>([]);
   const [workspaces, setWorkspaces] = useState<WorkspaceOption[]>([]);
   const [selectedWorkspaceCode, setSelectedWorkspaceCode] = useState<string | null>(
     null,
@@ -110,7 +111,9 @@ export function HomeScreen({ navigation }: Props) {
   const [contentLoading, setContentLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [openingDudeCode, setOpeningDudeCode] = useState<string | null>(null);
+  const [openingAssistantCode, setOpeningAssistantCode] = useState<
+    string | null
+  >(null);
 
   const computerId = computer?.id ?? null;
 
@@ -147,7 +150,7 @@ export function HomeScreen({ navigation }: Props) {
         : (activeWorkspaces[0]?.workspaceCode ?? null);
 
     // Workspace availability is what makes the create button usable, so it is
-    // committed before loading Dudes. A Dude failure must not hide the
+    // committed before loading assistants. A failure must not hide the
     // workspaces or leave the screen without a default selection.
     if (sequence !== overviewSeqRef.current) {
       return selectedWorkspaceRef.current;
@@ -156,9 +159,9 @@ export function HomeScreen({ navigation }: Props) {
     selectedWorkspaceRef.current = candidate;
     setSelectedWorkspaceCode(candidate);
 
-    const [nextDudes, nextMenus] = await Promise.all([
+    const [nextAssistants, nextMenus] = await Promise.all([
       sessionRequest(({ tunnel }) =>
-        listDudes({
+        listAssistants({
           tunnel,
           workspaceCode: candidate ?? undefined,
         }),
@@ -171,7 +174,7 @@ export function HomeScreen({ navigation }: Props) {
       return selectedWorkspaceRef.current;
     }
 
-    setDudes(nextDudes);
+    setAssistants(nextAssistants);
     setMenus(nextMenus);
     return candidate;
   }, [computerId, sessionRequest]);
@@ -249,7 +252,7 @@ export function HomeScreen({ navigation }: Props) {
     contentSeqRef.current += 1;
     selectedWorkspaceRef.current = null;
     hasLoadedRef.current = false;
-    setDudes([]);
+    setAssistants([]);
     setWorkspaces([]);
     setSelectedWorkspaceCode(null);
     setProjects([]);
@@ -332,12 +335,12 @@ export function HomeScreen({ navigation }: Props) {
     [workspaces],
   );
 
-  const sortedDudes = useMemo(
+  const sortedAssistants = useMemo(
     () =>
-      [...dudes].sort(
+      [...assistants].sort(
         (left, right) => Number(right.isMain) - Number(left.isMain),
       ),
-    [dudes],
+    [assistants],
   );
 
   const allSessions = useMemo(() => {
@@ -423,75 +426,77 @@ export function HomeScreen({ navigation }: Props) {
         setError(t("该会话缺少工作空间信息，请刷新后重试"));
         return;
       }
-      const isDudeSession =
-        (session.sourceType ?? "").toUpperCase() === "DUDE";
-      const matchingDude = isDudeSession
-        ? dudes.find((dude) => dude.dudeCode === session.sourceCode)
+      const isAssistantSession =
+        (session.sourceType ?? "").toUpperCase() === ASSISTANT_SOURCE_TYPE;
+      const matchingAssistant = isAssistantSession
+        ? assistants.find(
+            (assistant) => assistant.assistantCode === session.sourceCode,
+          )
         : undefined;
       navigation.push("Chat", {
         session,
         workspaceCode,
-        dudeCode: isDudeSession
-          ? (matchingDude?.dudeCode ?? session.sourceCode ?? null)
+        assistantCode: isAssistantSession
+          ? (matchingAssistant?.assistantCode ?? session.sourceCode ?? null)
           : null,
-        dudeName: matchingDude?.name ?? null,
+        assistantName: matchingAssistant?.name ?? null,
       });
     },
-    [dudes, navigation],
+    [assistants, navigation],
   );
 
-  const openDudeSession = useCallback(
-    async (dude: Dude) => {
-      if (!dude.enabled || openingDudeCode || sessionStatus !== "online") {
+  const openAssistantSession = useCallback(
+    async (assistant: Assistant) => {
+      if (!assistant.enabled || openingAssistantCode || sessionStatus !== "online") {
         return;
       }
-      setOpeningDudeCode(dude.dudeCode);
+      setOpeningAssistantCode(assistant.assistantCode);
       setError(null);
       try {
-        const workspaceCodeForDude =
+        const workspaceCodeForAssistant =
           selectedWorkspaceRef.current ??
           activeWorkspaces[0]?.workspaceCode ??
           workspaces[0]?.workspaceCode ??
           undefined;
-        const session = dude.isMain
+        const session = assistant.isMain
           ? await sessionRequest(({ tunnel }) =>
-              createMainDudeSession({
+              createMainAssistantSession({
                 tunnel,
-                workspaceCode: workspaceCodeForDude,
+                workspaceCode: workspaceCodeForAssistant,
               }),
             )
           : await sessionRequest(({ tunnel }) =>
-              createDudeSession({
+              createAssistantSession({
                 tunnel,
-                dudeCode: dude.dudeCode,
-                workspaceCode: workspaceCodeForDude,
+                assistantCode: assistant.assistantCode,
+                workspaceCode: workspaceCodeForAssistant,
               }),
             );
         const workspaceCode =
           session.workspaceCode ??
           selectedWorkspaceRef.current ??
-          workspaceCodeForDude ??
+          workspaceCodeForAssistant ??
           null;
         if (!workspaceCode) {
-          setError(t("这台电脑还没有可用工作空间，无法打开 Dude 会话"));
+          setError(t("这台电脑还没有可用工作空间，无法打开个人助手会话"));
           return;
         }
         navigation.push("Chat", {
           session,
           workspaceCode,
-          dudeCode: dude.dudeCode,
-          dudeName: dude.name,
+          assistantCode: assistant.assistantCode,
+          assistantName: assistant.name,
         });
-      } catch (dudeError) {
-        if (focusedRef.current) setError(describeError(dudeError));
+      } catch (assistantError) {
+        if (focusedRef.current) setError(describeError(assistantError));
       } finally {
-        setOpeningDudeCode(null);
+        setOpeningAssistantCode(null);
       }
     },
     [
       activeWorkspaces,
       navigation,
-      openingDudeCode,
+      openingAssistantCode,
       sessionRequest,
       sessionStatus,
       t,
@@ -526,8 +531,8 @@ export function HomeScreen({ navigation }: Props) {
       navigation.push("Chat", {
         session,
         workspaceCode: session.workspaceCode ?? workspaceCode,
-        dudeCode: null,
-        dudeName: null,
+        assistantCode: null,
+        assistantName: null,
       });
     } catch (createError) {
       if (focusedRef.current) setError(describeError(createError));
@@ -587,7 +592,7 @@ export function HomeScreen({ navigation }: Props) {
     sessionStatus === "online" &&
     !loading &&
     Boolean(error) &&
-    dudes.length === 0 &&
+    assistants.length === 0 &&
     workspaces.length === 0;
 
   const statusLabel = offline
@@ -596,28 +601,28 @@ export function HomeScreen({ navigation }: Props) {
       ? t("在线")
       : t("连接中");
 
-  const renderDudeSection = () => (
+  const renderAssistantSection = () => (
     <View style={styles.section}>
-      <SectionHeader title="Dude" count={dudes.length} />
-      {dudes.length === 0 ? (
+      <SectionHeader title={t("个人助手")} count={assistants.length} />
+      {assistants.length === 0 ? (
         <EmptyState
           bare
           icon="sparkles-outline"
-          title={t("暂无 Dude")}
-          message={t("在电脑端创建 Dude 后，这里会显示可用的助手。")}
+          title={t("暂无个人助手")}
+          message={t("在电脑端创建个人助手后，这里会显示可用的个人助手。")}
         />
       ) : (
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.dudeList}
+          contentContainerStyle={styles.assistantList}
         >
-          {sortedDudes.map((dude) => (
-            <DudeCard
-              key={dude.dudeCode}
-              dude={dude}
-              opening={openingDudeCode === dude.dudeCode}
-              onPress={() => void openDudeSession(dude)}
+          {sortedAssistants.map((assistant) => (
+            <AssistantCard
+              key={assistant.assistantCode}
+              assistant={assistant}
+              opening={openingAssistantCode === assistant.assistantCode}
+              onPress={() => void openAssistantSession(assistant)}
             />
           ))}
         </ScrollView>
@@ -1028,7 +1033,7 @@ export function HomeScreen({ navigation }: Props) {
           ) : wide ? (
             <View style={styles.columns}>
               <View style={styles.column}>
-                {renderDudeSection()}
+                {renderAssistantSection()}
                 {renderWorkspaceSection()}
               </View>
               <View style={styles.column}>
@@ -1038,7 +1043,7 @@ export function HomeScreen({ navigation }: Props) {
             </View>
           ) : (
             <View style={styles.mobileStack}>
-              {renderDudeSection()}
+              {renderAssistantSection()}
               {renderWorkspaceSection()}
               {tabControl}
               {activeTab}
@@ -1127,11 +1132,11 @@ const createStyles = (c: Palette) =>
       lineHeight: 18,
       paddingVertical: spacing.sm,
     },
-    dudeList: {
+    assistantList: {
       gap: spacing.md,
       paddingRight: spacing.sm,
     },
-    dudeCard: {
+    assistantCard: {
       width: 200,
       minHeight: 172,
       padding: spacing.lg,
@@ -1141,21 +1146,21 @@ const createStyles = (c: Palette) =>
       borderColor: c.border,
       gap: spacing.sm,
     },
-    dudeCardMain: {
+    assistantCardMain: {
       borderColor: c.accentBorder,
       backgroundColor: c.surfaceAlt,
     },
-    dudeDisabled: {
+    assistantDisabled: {
       opacity: 0.65,
     },
-    dudeTopRow: {
+    assistantTopRow: {
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
       gap: spacing.sm,
       minHeight: 28,
     },
-    dudeAvatar: {
+    assistantAvatar: {
       width: 32,
       height: 32,
       borderRadius: 16,
@@ -1165,23 +1170,23 @@ const createStyles = (c: Palette) =>
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: c.accentBorder,
     },
-    dudeBadges: {
+    assistantBadges: {
       flexDirection: "row",
       gap: spacing.xs,
       flexShrink: 1,
     },
-    dudeName: {
+    assistantName: {
       color: c.text,
       ...typography.bodyStrong,
       fontSize: 16,
     },
-    dudeDescription: {
+    assistantDescription: {
       flex: 1,
       color: c.muted,
       ...typography.caption,
       lineHeight: 17,
     },
-    dudeFooter: {
+    assistantFooter: {
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
@@ -1189,7 +1194,7 @@ const createStyles = (c: Palette) =>
       borderTopColor: c.border,
       paddingTop: spacing.sm,
     },
-    dudeFooterText: {
+    assistantFooterText: {
       color: c.muted,
       ...typography.caption,
       fontSize: 11,

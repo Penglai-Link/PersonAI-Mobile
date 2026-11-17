@@ -68,10 +68,19 @@ export interface NodeSessionContextValue {
 const NodeSessionContext = createContext<NodeSessionContextValue | null>(null);
 
 const HEALTH_INTERVAL_MS = 15_000;
-const HEALTH_TIMEOUT_MS = 5_000;
+/** Generous on purpose: a slow ack must not read as "the computer is gone". */
+const HEALTH_TIMEOUT_MS = 10_000;
+/** Automatic reconnect backoff; the cap keeps trying while the app is open. */
+const RECOVERY_DELAYS_MS = [2_000, 5_000, 10_000, 20_000, 30_000];
+/**
+ * Attempts the app makes before it admits the node is offline. Retries keep
+ * running afterwards, so a brief outage heals without a manual tap.
+ */
+const OFFLINE_AFTER_FAILURES = 3;
 
 const OFFLINE_MESSAGE =
   "电脑离线，请确认电脑端正在运行远程访问，并检查网络与节点地址。";
+const RECONNECTING_MESSAGE = "连接中断，正在自动重连…";
 const TICKET_MESSAGE =
   "配对票据无效或已过期，请在电脑端刷新配对二维码后重新扫码配对。";
 const DEVICE_MESSAGE =
@@ -84,6 +93,11 @@ function sessionNodeKey(node: SavedNode | null): string | null {
   // The node identity is stable across LAN/public endpoints. Endpoint changes
   // must not discard in-memory conversation content.
   return `${node.id}|${node.nodeId}|${node.keyId}`;
+}
+
+/** `null` (web before the first event) counts as foreground. */
+function inForeground(state: AppStateStatus | null): boolean {
+  return state === null || state === "active";
 }
 
 function shouldRetryOnNewTunnel(error: unknown): boolean {
@@ -110,6 +124,10 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
   const appStateRef = useRef<AppStateStatus | null>(
     (AppState.currentState as AppStateStatus | null) ?? null,
   );
+  /** Pending backoff timer for the automatic reconnect loop. */
+  const recoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recoveryAttemptRef = useRef(0);
+  const recoveringRef = useRef(false);
 
   const nodeKey = useMemo(() => sessionNodeKey(currentNode), [currentNode]);
 
@@ -133,12 +151,13 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
       if (node) markNodeOffline(node.id);
       if (statusRef.current !== "offline") {
         setStatusValue("offline");
-        bumpEpoch();
+        // Conversation content is dropped on node switch and background, never
+        // on a connectivity flap: the messages are still valid on the node.
       }
       setError(translate(reason));
       setMethods([]);
     },
-    [bumpEpoch, markNodeOffline, setStatusValue],
+    [markNodeOffline, setStatusValue],
   );
 
   /** Records the authenticated device/session facts on the saved node. */
@@ -185,6 +204,122 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
       return tunnels.acquire(node);
     },
     [],
+  );
+
+  const stopRecovery = useCallback(() => {
+    if (recoveryTimerRef.current) {
+      clearTimeout(recoveryTimerRef.current);
+      recoveryTimerRef.current = null;
+    }
+    recoveringRef.current = false;
+    recoveryAttemptRef.current = 0;
+  }, []);
+
+  /** One heartbeat against the node; used to tell "slow" from "gone". */
+  const channelAlive = useCallback(async (node: SavedNode): Promise<boolean> => {
+    try {
+      const tunnel = await tunnels.acquire(node);
+      await tunnel.ping(HEALTH_TIMEOUT_MS);
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  /**
+   * Keeps trying the node with backoff instead of dead-ending on the offline
+   * card. Only repeated failures are reported as offline, and the loop keeps
+   * running afterwards so a short outage heals on its own.
+   *
+   * `soft` means "we are not sure yet" (a request timed out): the active
+   * session shows a reconnecting banner and keeps its content, while hard
+   * failures keep whatever message the caller already set.
+   */
+  const beginRecovery = useCallback(
+    (options: { soft?: boolean } = {}) => {
+      if (!nodeRef.current) return;
+      if (!inForeground(appStateRef.current)) return;
+      if (recoveringRef.current) return;
+      recoveringRef.current = true;
+      if (options.soft) {
+        if (statusRef.current === "online") setStatusValue("connecting");
+        setError(translate(RECONNECTING_MESSAGE));
+      }
+
+      const schedule = (): void => {
+        if (!nodeRef.current || !inForeground(appStateRef.current)) {
+          stopRecovery();
+          return;
+        }
+        const index = Math.min(
+          recoveryAttemptRef.current,
+          RECOVERY_DELAYS_MS.length - 1,
+        );
+        recoveryTimerRef.current = setTimeout(() => {
+          recoveryTimerRef.current = null;
+          void (async () => {
+            const node = nodeRef.current;
+            if (!node || !inForeground(appStateRef.current)) {
+              stopRecovery();
+              return;
+            }
+            try {
+              const tunnel = await tunnels.connectAndPing(
+                node,
+                HEALTH_TIMEOUT_MS,
+              );
+              const isCurrent = nodeRef.current?.id === node.id;
+              stopRecovery();
+              syncSession(node, tunnel);
+              if (isCurrent) setError(null);
+            } catch (recoveryError) {
+              recoveryAttemptRef.current += 1;
+              if (
+                recoveryAttemptRef.current >= OFFLINE_AFTER_FAILURES &&
+                nodeRef.current?.id === node.id
+              ) {
+                markOfflineState(describeConnectionError(recoveryError));
+              }
+              schedule();
+            }
+          })();
+        }, RECOVERY_DELAYS_MS[index]);
+      };
+
+      schedule();
+    },
+    [
+      describeConnectionError,
+      markOfflineState,
+      setStatusValue,
+      stopRecovery,
+      syncSession,
+    ],
+  );
+
+  /**
+   * A dropped call only proves the call died. Heartbeat first: if the channel
+   * still answers, the node is online (a large result may simply have been
+   * dropped by the node) and the session state must not change.
+   */
+  const handleTransportFailure = useCallback(
+    (failure: unknown) => {
+      const node = nodeRef.current;
+      if (!node) return;
+      const channelLost =
+        failure instanceof ApiError &&
+        (failure.code === "TUNNEL_CLOSED" ||
+          failure.code === "SOCKET_ERROR" ||
+          failure.code === "TUNNEL_HEARTBEAT_TIMEOUT");
+      if (channelLost) {
+        beginRecovery({ soft: true });
+        return;
+      }
+      void channelAlive(node).then((alive) => {
+        if (!alive && nodeRef.current?.id === node.id) beginRecovery();
+      });
+    },
+    [beginRecovery, channelAlive],
   );
 
   const invokeForNode = useCallback(
@@ -259,19 +394,19 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
       try {
         return await invokeForNode(node, invoke, options);
       } catch (requestError) {
-        if (isTransportError(requestError)) markOfflineState(OFFLINE_MESSAGE);
+        if (isTransportError(requestError)) handleTransportFailure(requestError);
         else if (isDeviceAuthError(requestError)) markOfflineState(DEVICE_MESSAGE);
         else if (isUnauthorizedError(requestError)) markOfflineState(TICKET_MESSAGE);
         throw requestError;
       }
     },
-    [invokeForNode, markOfflineState],
+    [handleTransportFailure, invokeForNode, markOfflineState],
   );
 
   const reportRequestError = useCallback(
     (requestError: unknown) => {
       if (isTransportError(requestError)) {
-        markOfflineState(OFFLINE_MESSAGE);
+        handleTransportFailure(requestError);
         return;
       }
       if (isDeviceAuthError(requestError)) {
@@ -282,12 +417,13 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
         markOfflineState(TICKET_MESSAGE);
       }
     },
-    [markOfflineState],
+    [handleTransportFailure, markOfflineState],
   );
 
   const connect = useCallback(async () => {
     const node = nodeRef.current;
     if (!node) return;
+    stopRecovery();
     setStatusValue("connecting");
     try {
       const tunnel = await tunnels.connectAndPing(node, HEALTH_TIMEOUT_MS);
@@ -296,12 +432,23 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
     } catch (connectError) {
       if (nodeRef.current?.id !== node.id) return;
       markOfflineState(describeConnectionError(connectError));
+      // Keep retrying in the background; the card clears by itself when the
+      // computer answers again.
+      beginRecovery();
     }
-  }, [describeConnectionError, markOfflineState, setStatusValue, syncSession]);
+  }, [
+    beginRecovery,
+    describeConnectionError,
+    markOfflineState,
+    setStatusValue,
+    stopRecovery,
+    syncSession,
+  ]);
 
   const probeNow = useCallback(async (): Promise<boolean> => {
     const node = nodeRef.current;
     if (!node) return false;
+    stopRecovery();
     try {
       const tunnel = await tunnels.connectAndPing(node, HEALTH_TIMEOUT_MS);
       if (nodeRef.current?.id !== node.id) return false;
@@ -310,10 +457,17 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
     } catch (probeError) {
       if (nodeRef.current?.id === node.id) {
         markOfflineState(describeConnectionError(probeError));
+        beginRecovery();
       }
       return false;
     }
-  }, [describeConnectionError, markOfflineState, syncSession]);
+  }, [
+    beginRecovery,
+    describeConnectionError,
+    markOfflineState,
+    stopRecovery,
+    syncSession,
+  ]);
 
   // Background: close every tunnel and drop in-memory conversation state.
   // SecureStore keeps the device key; returning to the foreground reconnects.
@@ -328,6 +482,7 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (previous === "active") {
+        stopRecovery();
         tunnels.closeAll();
         setMethods([]);
         setError(null);
@@ -336,10 +491,11 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
       }
     });
     return () => subscription.remove();
-  }, [bumpEpoch, probeNow, setStatusValue]);
+  }, [bumpEpoch, probeNow, setStatusValue, stopRecovery]);
 
   // Foreground heartbeat: keeps `ready.methods` and online state fresh without
-  // any HTTP probe path.
+  // any HTTP probe path. A miss starts the reconnect loop instead of pinning
+  // the session to "offline" until the user taps the card.
   useEffect(() => {
     if (!ready || !nodeKey) return;
     const timer = setInterval(() => {
@@ -353,19 +509,18 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
           await tunnel.ping(HEALTH_TIMEOUT_MS);
           if (nodeRef.current?.id === node.id) markNodeOnline(node.id);
         } catch {
-          if (nodeRef.current?.id === node.id) {
-            markOfflineState(OFFLINE_MESSAGE);
-          }
+          if (nodeRef.current?.id === node.id) beginRecovery({ soft: true });
         }
       })();
     }, HEALTH_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [markNodeOnline, markOfflineState, nodeKey, ready]);
+  }, [beginRecovery, markNodeOnline, nodeKey, ready]);
 
   // Node switch: drop previous tunnels and content, then reconnect.
   useEffect(() => {
     if (!ready) return;
     const node = nodeRef.current;
+    stopRecovery();
     tunnels.closeAll();
     setMethods([]);
     setError(null);
@@ -377,6 +532,9 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
     // `nodeKey` is the transport identity of the active node; refs hold state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeKey, ready]);
+
+  // Never leave a retry timer behind when the provider unmounts.
+  useEffect(() => stopRecovery, [stopRecovery]);
 
   const value = useMemo<NodeSessionContextValue>(
     () => ({

@@ -78,7 +78,7 @@ src/
 | `src/screens/DashboardScreen.tsx` | 跨节点看板 |
 | `src/navigation/Drawer.tsx` | 左缘手势与侧滑菜单外壳 |
 | `src/navigation/DrawerTree.tsx` | 产品 → 节点 → 会话树 |
-| `src/utils/nodeOverview.ts` | 按节点读取工作区、Dude 与会话 |
+| `src/utils/nodeOverview.ts` | 按节点读取工作区、个人助手与会话 |
 | `src/i18n/messages.ts` | 界面文案与英文翻译 |
 | `app.json` / `eas.json` | Expo 应用配置与构建配置 |
 
@@ -149,10 +149,10 @@ tron://pair?v=1&url=<urlencoded baseUrl>&token=<token>&name=<urlencoded machineN
 - `GET /api/v1/remote/identity`：JWT 认证，返回节点 identity。
 - `GET /api/v1/health`：无需认证，用于在线探测。
 - `GET /api/v1/admin/workspaces/options`：工作区列表。
-- `GET /api/v1/chats/session-groups`、`GET /api/v1/dudes`：会话与 Dude。
+- `GET /api/v1/chats/session-groups`、`GET /api/v1/assistants`：会话与个人助手。
 - `POST /api/v1/projects/list`、`GET /api/v1/directories`：项目与目录列表，用于 Tron 的主题和目录分组。
 - `POST /api/v1/chats/sessions`：新建会话。
-- `POST /api/v1/dudes/main/session`、`POST /api/v1/dudes/{dudeCode}/sessions`：创建 Dude 会话。
+- `POST /api/v1/assistants/main/session`、`POST /api/v1/assistants/{assistantCode}/sessions`：创建个人助手会话。
 - `GET/POST /api/v1/chats/sessions/{sessionCode}/messages`：消息读取与普通发送。
 - `POST /api/v1/chats/sessions/{sessionCode}/messages/stream`：SSE 流式回复。
 

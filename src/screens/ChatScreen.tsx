@@ -13,6 +13,7 @@ import {
 } from "react-native";
 
 import {
+  ASSISTANT_SOURCE_TYPE,
   listChatMessages,
   listChatProtocolEvents,
   sendChatMessageStream,
@@ -111,15 +112,17 @@ export function ChatScreen({ navigation, route }: Props) {
   const sessionCode = session.sessionCode;
   const workspaceCode =
     route.params.workspaceCode || session.workspaceCode || "";
-  const effectiveDudeCode =
-    route.params.dudeCode ??
-    ((session.sourceType ?? "").toUpperCase() === "DUDE"
+  const effectiveAssistantCode =
+    route.params.assistantCode ??
+    ((session.sourceType ?? "").toUpperCase() === ASSISTANT_SOURCE_TYPE
       ? (session.sourceCode ?? null)
       : null);
-  const dudeName = route.params.dudeName ?? null;
+  const assistantName = route.params.assistantName ?? null;
   const title =
     session.title?.trim() ||
-    (dudeName ? format("与 {name} 的会话", { name: dudeName }) : t("新会话"));
+    (assistantName
+      ? format("与 {name} 的会话", { name: assistantName })
+      : t("新会话"));
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -142,6 +145,10 @@ export function ChatScreen({ navigation, route }: Props) {
   const sendingRef = useRef(false);
   const sessionStatusRef = useRef(sessionStatus);
   const liveTraceRef = useRef<RunTrace | null>(null);
+  /** What the message list was last reset for; status flips must not reset it. */
+  const resetKeyRef = useRef<string>("");
+  /** Guards the one reload per online transition. */
+  const onlineLoadedRef = useRef(false);
   const queuedRef = useRef<QueuedChatMessage[]>([]);
   const runMessageRef = useRef<(content: string) => Promise<void>>(
     async () => undefined,
@@ -180,7 +187,7 @@ export function ChatScreen({ navigation, route }: Props) {
             tunnel,
             sessionCode,
             workspaceCode,
-            dudeCode: effectiveDudeCode,
+            assistantCode: effectiveAssistantCode,
           }),
         { retry: false },
       )
@@ -199,7 +206,7 @@ export function ChatScreen({ navigation, route }: Props) {
         })
         .catch(() => undefined);
     },
-    [effectiveDudeCode, sessionCode, sessionRequest, sessionStatus, workspaceCode],
+    [effectiveAssistantCode, sessionCode, sessionRequest, sessionStatus, workspaceCode],
   );
 
   const loadMessages = useCallback(
@@ -216,7 +223,7 @@ export function ChatScreen({ navigation, route }: Props) {
             tunnel,
             sessionCode,
             workspaceCode,
-            dudeCode: effectiveDudeCode,
+            assistantCode: effectiveAssistantCode,
           }),
         );
         if (sequence !== messagesSeqRef.current) return;
@@ -231,7 +238,7 @@ export function ChatScreen({ navigation, route }: Props) {
       }
     },
     [
-      effectiveDudeCode,
+      effectiveAssistantCode,
       refreshProtocolEvents,
       sessionCode,
       sessionRequest,
@@ -240,9 +247,14 @@ export function ChatScreen({ navigation, route }: Props) {
     ],
   );
 
-  // Session/epoch changes (node switch, app background, offline) clear the
-  // in-memory message list before any reload.
+  // Only a node switch, a background transition, or another session clears the
+  // in-memory list. A connectivity flip (online -> reconnecting -> online) must
+  // never wipe what is already on screen.
   useEffect(() => {
+    const resetKey = `${contentEpoch}|${sessionCode}`;
+    if (resetKeyRef.current === resetKey) return;
+    resetKeyRef.current = resetKey;
+    onlineLoadedRef.current = false;
     streamControllerRef.current?.abort();
     streamControllerRef.current = null;
     messagesSeqRef.current += 1;
@@ -259,10 +271,18 @@ export function ChatScreen({ navigation, route }: Props) {
     queuedRef.current = [];
     setQueued([]);
     setLoading(sessionStatus !== "offline");
-    if (sessionStatus === "online") {
-      void loadMessages(true);
+  }, [contentEpoch, sessionCode, sessionStatus]);
+
+  // Reconnects reload the transcript in place instead of clearing it.
+  useEffect(() => {
+    if (sessionStatus !== "online") {
+      onlineLoadedRef.current = false;
+      return;
     }
-  }, [contentEpoch, loadMessages, sessionCode, sessionStatus]);
+    if (onlineLoadedRef.current) return;
+    onlineLoadedRef.current = true;
+    void loadMessages(true);
+  }, [loadMessages, sessionStatus]);
 
   const reloadMessages = useCallback(async (): Promise<ChatMessage[] | null> => {
     if (!workspaceCode || sessionStatus !== "online") return null;
@@ -273,7 +293,7 @@ export function ChatScreen({ navigation, route }: Props) {
           tunnel,
           sessionCode,
           workspaceCode,
-          dudeCode: effectiveDudeCode,
+          assistantCode: effectiveAssistantCode,
         }),
       );
       if (mountedRef.current && sequence === messagesSeqRef.current) {
@@ -287,7 +307,7 @@ export function ChatScreen({ navigation, route }: Props) {
       return null;
     }
   }, [
-    effectiveDudeCode,
+    effectiveAssistantCode,
     refreshProtocolEvents,
     sessionCode,
     sessionRequest,
@@ -357,7 +377,7 @@ export function ChatScreen({ navigation, route }: Props) {
               sessionCode,
               workspaceCode,
               content,
-              dudeCode: effectiveDudeCode,
+              assistantCode: effectiveAssistantCode,
               signal: controller.signal,
               onDelta: (delta) => {
                 accumulated += delta;
@@ -462,7 +482,7 @@ export function ChatScreen({ navigation, route }: Props) {
       }
     },
     [
-      effectiveDudeCode,
+      effectiveAssistantCode,
       reloadMessages,
       reportRequestError,
       sessionCode,
@@ -504,7 +524,7 @@ export function ChatScreen({ navigation, route }: Props) {
             runId: activeRunId,
             content,
             workspaceCode,
-            dudeCode: effectiveDudeCode,
+            assistantCode: effectiveAssistantCode,
           }),
         { retry: false },
       );
@@ -520,7 +540,7 @@ export function ChatScreen({ navigation, route }: Props) {
     }
   }, [
     activeRunId,
-    effectiveDudeCode,
+    effectiveAssistantCode,
     input,
     sessionCode,
     sessionRequest,
@@ -556,7 +576,7 @@ export function ChatScreen({ navigation, route }: Props) {
             tunnel,
             sessionCode,
             runId: activeRunId,
-            dudeCode: effectiveDudeCode,
+            assistantCode: effectiveAssistantCode,
           }),
         { retry: false },
       );
@@ -564,7 +584,7 @@ export function ChatScreen({ navigation, route }: Props) {
     } catch (stopError) {
       if (mountedRef.current) setError(describeError(stopError));
     }
-  }, [activeRunId, effectiveDudeCode, sessionCode, sessionRequest, t]);
+  }, [activeRunId, effectiveAssistantCode, sessionCode, sessionRequest, t]);
 
   const horizontalPadding = 20;
   const offline = sessionStatus === "offline";
@@ -593,7 +613,11 @@ export function ChatScreen({ navigation, route }: Props) {
         >
           <AppHeader
             title={title}
-            subtitle={dudeName ? `Dude · ${dudeName}` : t("会话", "chat")}
+            subtitle={
+              assistantName
+                ? `${t("个人助手")} · ${assistantName}`
+                : t("会话", "chat")
+            }
             onBack={() => navigation.goBack()}
             right={
               <Pressable
@@ -637,6 +661,14 @@ export function ChatScreen({ navigation, route }: Props) {
         ) : (
           <View style={[styles.body, { paddingHorizontal: wide ? 32 : 0 }]}>
             <View style={styles.chatColumn}>
+              {sessionStatus === "connecting" && sessionError ? (
+                <View style={styles.bannerWrap}>
+                  <InlineBanner
+                    message={sessionError ?? t("正在重新连接电脑…")}
+                    tone="info"
+                  />
+                </View>
+              ) : null}
               {notice ? (
                 <View style={styles.bannerWrap}>
                   <InlineBanner message={notice} tone="info" />
@@ -705,9 +737,9 @@ export function ChatScreen({ navigation, route }: Props) {
                       icon="chatbubble-ellipses-outline"
                       title={t("开始对话")}
                       message={
-                        dudeName
+                        assistantName
                           ? format("和 {name} 打个招呼，开始新的对话。", {
-                              name: dudeName,
+                              name: assistantName,
                             })
                           : t("发送一条消息，Tron 会在这里回复。")
                       }
@@ -723,7 +755,7 @@ export function ChatScreen({ navigation, route }: Props) {
                       <LocalMessageBubble
                         role="ASSISTANT"
                         content={streamText}
-                        assistantName={dudeName}
+                        assistantName={assistantName}
                         pending
                       />
                     </View>
@@ -833,8 +865,8 @@ export function ChatScreen({ navigation, route }: Props) {
                     value={input}
                     onChangeText={setInput}
                     placeholder={
-                      dudeName
-                        ? format("给 {name} 发消息…", { name: dudeName })
+                      assistantName
+                        ? format("给 {name} 发消息…", { name: assistantName })
                         : t("输入消息…")
                     }
                     placeholderTextColor={palette.muted}

@@ -155,7 +155,7 @@ const AUTH_ERROR_CODES = new Set([
 
 export interface RawRequestParams {
   tunnel: SecureTunnel;
-  /** RPC method name, e.g. `session.list`, `tron.dudes.list`. */
+  /** RPC method name, e.g. `session.list`, `tron.assistants.list`. */
   method: string;
   params?: unknown;
   signal?: AbortSignal;

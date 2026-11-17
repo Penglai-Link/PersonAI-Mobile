@@ -2,7 +2,7 @@
  * Tron product RPC wrappers.
  *
  * `session.*` is the framework-defined generic chat contract (implemented in
- * `rpc.ts`); `tron.*` covers the Tron-specific catalog (workspaces, Dudes,
+ * `rpc.ts`); `tron.*` covers the Tron-specific catalog (workspaces, assistants,
  * projects, directories, session groups, skins). Both travel over the same
  * encrypted tunnel — this module never performs HTTP requests.
  */
@@ -25,13 +25,16 @@ import { translate } from "../i18n";
 export const TRON_PRODUCT_CODE = "tron";
 export const TRON_PRODUCT_NAME = "Tron Harness";
 
+/** `ChatSession.sourceType` of a session opened from an assistant. */
+export const ASSISTANT_SOURCE_TYPE = "ASSISTANT";
+
 /** Product-namespace RPC methods registered by `tron-remote-pack`. */
 export const TRON_RPC_METHODS = {
   skinsList: "tron.skins.list",
   skinsActive: "tron.skins.active",
-  dudesList: "tron.dudes.list",
-  dudesMainSession: "tron.dudes.mainSession",
-  dudesCreateSession: "tron.dudes.createSession",
+  assistantsList: "tron.assistants.list",
+  assistantsMainSession: "tron.assistants.mainSession",
+  assistantsCreateSession: "tron.assistants.createSession",
   workspacesList: "tron.workspaces.list",
   projectsList: "tron.projects.list",
   directoriesList: "tron.directories.list",
@@ -71,8 +74,8 @@ export interface Skin {
   resources: SkinResources;
 }
 
-export interface Dude {
-  dudeCode: string;
+export interface Assistant {
+  assistantCode: string;
   agentCode: string;
   name: string;
   description: string;
@@ -166,7 +169,7 @@ export interface TronConnection {
 
 interface ApiParams extends TronConnection {
   signal?: AbortSignal;
-  dudeCode?: string | null;
+  assistantCode?: string | null;
   workspaceCode?: string | null;
 }
 
@@ -183,7 +186,9 @@ function scopeParam(
 ): Record<string, unknown> {
   return {
     ...workspaceParam(params.workspaceCode),
-    ...(params.dudeCode?.trim() ? { dudeCode: params.dudeCode.trim() } : {}),
+    ...(params.assistantCode?.trim()
+      ? { assistantCode: params.assistantCode.trim() }
+      : {}),
     ...extra,
   };
 }
@@ -466,40 +471,40 @@ export async function getActiveSkin(
   return skin ? { skin } : null;
 }
 
-/** `tron.dudes.list` — Dudes available in the workspace. */
-export async function listDudes(params: ApiParams): Promise<Dude[]> {
-  const data = await callTron<Dude[]>(
+/** `tron.assistants.list` — assistants available in the workspace. */
+export async function listAssistants(params: ApiParams): Promise<Assistant[]> {
+  const data = await callTron<Assistant[]>(
     params,
-    TRON_RPC_METHODS.dudesList,
+    TRON_RPC_METHODS.assistantsList,
     workspaceParam(params.workspaceCode),
   );
   return Array.isArray(data) ? data : [];
 }
 
-/** `tron.dudes.mainSession` — creates a session with the main Dude. */
-export async function createMainDudeSession(
+/** `tron.assistants.mainSession` — creates a session with the main assistant. */
+export async function createMainAssistantSession(
   params: ApiParams,
 ): Promise<ChatSession> {
   const data = await callTron<unknown>(
     params,
-    TRON_RPC_METHODS.dudesMainSession,
+    TRON_RPC_METHODS.assistantsMainSession,
     workspaceParam(params.workspaceCode),
     45_000,
   );
-  return normalizeChatSession(data, translate("电脑没有返回有效的 Dude 会话"));
+  return normalizeChatSession(data, translate("电脑没有返回有效的个人助手会话"));
 }
 
-/** `tron.dudes.createSession` — creates a session for a specific Dude. */
-export async function createDudeSession(
-  params: ApiParams & { dudeCode: string },
+/** `tron.assistants.createSession` — creates a session for a specific assistant. */
+export async function createAssistantSession(
+  params: ApiParams & { assistantCode: string },
 ): Promise<ChatSession> {
   const data = await callTron<unknown>(
     params,
-    TRON_RPC_METHODS.dudesCreateSession,
-    { dudeCode: params.dudeCode, ...workspaceParam(params.workspaceCode) },
+    TRON_RPC_METHODS.assistantsCreateSession,
+    { assistantCode: params.assistantCode, ...workspaceParam(params.workspaceCode) },
     45_000,
   );
-  return normalizeChatSession(data, translate("电脑没有返回有效的 Dude 会话"));
+  return normalizeChatSession(data, translate("电脑没有返回有效的个人助手会话"));
 }
 
 /** `tron.workspaces.list` — workspace options. */
@@ -618,7 +623,9 @@ export async function listChatMessages(
     {
       sessionId: params.sessionCode,
       limit: 200,
-      metadata: params.dudeCode ? { dudeCode: params.dudeCode } : undefined,
+      metadata: params.assistantCode
+        ? { assistantCode: params.assistantCode }
+        : undefined,
     },
     { signal: params.signal, timeoutMs: 20_000 },
   );
@@ -635,7 +642,9 @@ export async function stopChatRun(
     {
       sessionId: params.sessionCode,
       runId: params.runId ?? null,
-      metadata: params.dudeCode ? { dudeCode: params.dudeCode } : undefined,
+      metadata: params.assistantCode
+        ? { assistantCode: params.assistantCode }
+        : undefined,
     },
     { signal: params.signal, timeoutMs: 15_000 },
   );
@@ -670,7 +679,7 @@ export async function sendChatMessageStream(
       clientCapabilities: { userInputRequests: false },
       metadata: {
         workspaceCode: params.workspaceCode ?? null,
-        dudeCode: params.dudeCode ?? null,
+        assistantCode: params.assistantCode ?? null,
       },
     },
     { signal: params.signal, timeoutMs: 180_000 },

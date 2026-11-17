@@ -81,7 +81,7 @@ Key files:
 | `src/screens/DashboardScreen.tsx` | Cross-node dashboard |
 | `src/navigation/Drawer.tsx` | Left-edge gesture and side menu shell |
 | `src/navigation/DrawerTree.tsx` | Product → node → session tree |
-| `src/utils/nodeOverview.ts` | Per-node workspaces, Dudes, and sessions |
+| `src/utils/nodeOverview.ts` | Per-node workspaces, PersonAI, and sessions |
 | `src/i18n/messages.ts` | UI strings and English translations |
 | `app.json` / `eas.json` | Expo app and build configuration |
 
@@ -161,10 +161,10 @@ Endpoints used by the app:
 - `GET /api/v1/remote/identity`: JWT-authenticated identity.
 - `GET /api/v1/health`: unauthenticated online probe.
 - `GET /api/v1/admin/workspaces/options`: workspace list.
-- `GET /api/v1/chats/session-groups`, `GET /api/v1/dudes`: sessions and Dudes.
+- `GET /api/v1/chats/session-groups`, `GET /api/v1/assistants`: sessions and PersonAI.
 - `POST /api/v1/projects/list`, `GET /api/v1/directories`: projects and directories for Tron's Topics and Directories groups.
 - `POST /api/v1/chats/sessions`: create a chat session.
-- `POST /api/v1/dudes/main/session`, `POST /api/v1/dudes/{dudeCode}/sessions`: create Dude sessions.
+- `POST /api/v1/assistants/main/session`, `POST /api/v1/assistants/{assistantCode}/sessions`: create PersonAI sessions.
 - `GET/POST /api/v1/chats/sessions/{sessionCode}/messages`: read messages and send without
   streaming.
 - `POST /api/v1/chats/sessions/{sessionCode}/messages/stream`: SSE streaming replies.

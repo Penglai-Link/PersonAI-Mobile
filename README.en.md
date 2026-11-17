@@ -21,13 +21,13 @@ Execution, files, and tools stay on the computer. The phone is where you start w
 <p align="center">
   <img src="docs/screenshots/dashboard.png" width="220" alt="Cross-node dashboard">
   <img src="docs/screenshots/drawer-session-tree.png" width="220" alt="Drawer organized by product, node and session">
-  <img src="docs/screenshots/chat-dude.png" width="220" alt="Streaming conversation with a Dude">
+  <img src="docs/screenshots/chat-personai.png" width="220" alt="Streaming conversation with a PersonAI">
 </p>
-<p align="center"><sub>Cross-node dashboard · products, nodes and sessions · conversation with a Dude (Chinese UI, demo data)</sub></p>
+<p align="center"><sub>Cross-node dashboard · products, nodes and sessions · conversation with a PersonAI (Chinese UI, demo data)</sub></p>
 
 ## One dashboard for every node
 
-The home screen summarizes every product and node: product count, online nodes, sessions, running tasks, and Dude cards from different machines.
+The home screen summarizes every product and node: product count, online nodes, sessions, running tasks, and PersonAI cards from different machines.
 
 You do not have to pick a computer first, and one offline machine never hides the others. A node is only contacted when you open a session; the dashboard itself does not interrupt the conversation you are in.
 
@@ -92,10 +92,10 @@ Built-in products work out of the box, and you can add your own product codes in
 
 | Product | Code | Mobile capabilities |
 | --- | --- | --- |
-| Tron Harness | `tron` | Topic/directory/quick-chat groups, Dudes, workspaces, streaming sessions |
-| Axiom Agent | `axiom-agent` | Sessions, workspaces, Dude summaries |
-| Novel Agent | `novel-agent` | Sessions, workspaces, Dude summaries |
-| GitDeck | `git-deck` | Sessions, workspaces, Dude summaries |
+| Tron Harness | `tron` | Topic/directory/quick-chat groups, PersonAI, workspaces, streaming sessions |
+| Axiom Agent | `axiom-agent` | Sessions, workspaces, PersonAI summaries |
+| Novel Agent | `novel-agent` | Sessions, workspaces, PersonAI summaries |
+| GitDeck | `git-deck` | Sessions, workspaces, PersonAI summaries |
 | Custom product | lowercase letters, digits, `.` or `-` | Single-level session list, addable and removable |
 
 ## Getting started

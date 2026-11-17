@@ -81,7 +81,7 @@ src/
 | `src/screens/DashboardScreen.tsx` | ノードをまたぐダッシュボード |
 | `src/navigation/Drawer.tsx` | 左端ジェスチャーとサイドメニュー |
 | `src/navigation/DrawerTree.tsx` | プロダクト → ノード → セッションのツリー |
-| `src/utils/nodeOverview.ts` | ノードごとのワークスペース、Dude、セッション |
+| `src/utils/nodeOverview.ts` | ノードごとのワークスペース、PersonAI、セッション |
 | `src/i18n/messages.ts` | UI 文言と英語翻訳 |
 | `app.json` / `eas.json` | Expo アプリとビルドの設定 |
 
@@ -166,10 +166,10 @@ tron://pair?v=1&url=<urlencoded baseUrl>&token=<token>&name=<urlencoded machineN
 - `GET /api/v1/remote/identity`：JWT 認証でノードの identity を取得。
 - `GET /api/v1/health`：認証不要のオンライン確認。
 - `GET /api/v1/admin/workspaces/options`：ワークスペース一覧。
-- `GET /api/v1/chats/session-groups`、`GET /api/v1/dudes`：セッションと Dude。
+- `GET /api/v1/chats/session-groups`、`GET /api/v1/assistants`：セッションと PersonAI。
 - `POST /api/v1/projects/list`、`GET /api/v1/directories`：Tron のトピックとディレクトリのグループに使うプロジェクト / ディレクトリ一覧。
 - `POST /api/v1/chats/sessions`：チャットセッションの作成。
-- `POST /api/v1/dudes/main/session`、`POST /api/v1/dudes/{dudeCode}/sessions`：Dude セッションの作成。
+- `POST /api/v1/assistants/main/session`、`POST /api/v1/assistants/{assistantCode}/sessions`：PersonAI セッションの作成。
 - `GET/POST /api/v1/chats/sessions/{sessionCode}/messages`：メッセージ取得と通常送信。
 - `POST /api/v1/chats/sessions/{sessionCode}/messages/stream`：SSE ストリーミング応答。
 

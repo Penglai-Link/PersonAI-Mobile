@@ -21,13 +21,13 @@ PersonAI Mobile は Person-AI エコシステムのオープンソース・モ�
 <p align="center">
   <img src="docs/screenshots/dashboard.png" width="220" alt="ノード横断ダッシュボード">
   <img src="docs/screenshots/drawer-session-tree.png" width="220" alt="プロダクト、ノード、セッションで整理されたドロワー">
-  <img src="docs/screenshots/chat-dude.png" width="220" alt="Dude とのストリーミング会話">
+  <img src="docs/screenshots/chat-personai.png" width="220" alt="PersonAI とのストリーミング会話">
 </p>
-<p align="center"><sub>ノード横断ダッシュボード · プロダクト、ノード、セッション · Dude との会話（中国語 UI、デモデータ）</sub></p>
+<p align="center"><sub>ノード横断ダッシュボード · プロダクト、ノード、セッション · PersonAI との会話（中国語 UI、デモデータ）</sub></p>
 
 ## すべてのノードを一つのダッシュボードで
 
-ホーム画面には、すべてのプロダクトとノードの概要が表示されます。プロダクト数、オンラインのノード、セッション数、実行中のタスク、そして各ノードの Dude カードです。
+ホーム画面には、すべてのプロダクトとノードの概要が表示されます。プロダクト数、オンラインのノード、セッション数、実行中のタスク、そして各ノードの PersonAI カードです。
 
 先に PC を選ぶ必要はなく、1 台がオフラインでも他のマシンの情報は隠れません。セッションを開いたときだけ該当ノードへ接続するため、ダッシュボードが会話を中断することはありません。
 
@@ -94,10 +94,10 @@ FRP、Cloudflare Tunnel、Tailscale、リバースプロキシの設定は
 
 | プロダクト | コード | スマートフォンでの機能 |
 | --- | --- | --- |
-| Tron Harness | `tron` | トピック／ディレクトリ／クイックチャット、Dude、ワークスペース、ストリーミングセッション |
-| Axiom Agent | `axiom-agent` | セッション、ワークスペース、Dude 概要 |
-| Novel Agent | `novel-agent` | セッション、ワークスペース、Dude 概要 |
-| GitDeck | `git-deck` | セッション、ワークスペース、Dude 概要 |
+| Tron Harness | `tron` | トピック／ディレクトリ／クイックチャット、PersonAI、ワークスペース、ストリーミングセッション |
+| Axiom Agent | `axiom-agent` | セッション、ワークスペース、PersonAI 概要 |
+| Novel Agent | `novel-agent` | セッション、ワークスペース、PersonAI 概要 |
+| GitDeck | `git-deck` | セッション、ワークスペース、PersonAI 概要 |
 | 独自プロダクト | 小文字英数字、`.`、`-` | 単一階層のセッション一覧、追加・削除可 |
 
 ## はじめかた

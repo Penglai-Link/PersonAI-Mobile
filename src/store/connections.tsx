@@ -311,7 +311,7 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
     try {
       const outcomes = await Promise.all(
         list.map(async (node) => {
-          const endpoint = await tunnels.probeNode(node, 1_200);
+          const endpoint = await tunnels.probeNode(node, 3_000);
           return { id: node.id, endpoint };
         }),
       );

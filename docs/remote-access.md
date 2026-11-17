@@ -75,9 +75,9 @@ Tron 产品方法（命名空间 `tron.*`）：
 
 ```text
 tron.workspaces.list
-tron.dudes.list
-tron.dudes.mainSession
-tron.dudes.createSession
+tron.assistants.list
+tron.assistants.mainSession
+tron.assistants.createSession
 tron.projects.list
 tron.directories.list
 tron.session.groups

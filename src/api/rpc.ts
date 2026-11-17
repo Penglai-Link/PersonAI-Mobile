@@ -48,7 +48,7 @@ export interface SessionHistoryParams {
   sessionId: string;
   cursor?: string | null;
   limit?: number;
-  /** Product context the pack forwards (for example a Dude code). */
+  /** Product context the pack forwards (for example an assistant code). */
   metadata?: Record<string, unknown>;
 }
 
@@ -74,7 +74,7 @@ export interface SessionSendMessageParams {
 export interface SessionStopRunParams {
   sessionId: string;
   runId?: string | null;
-  /** Product context the pack forwards (for example a Dude code). */
+  /** Product context the pack forwards (for example an assistant code). */
   metadata?: Record<string, unknown>;
 }
 
