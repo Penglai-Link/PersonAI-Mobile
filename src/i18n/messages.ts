@@ -468,4 +468,25 @@ export const enMessages: Record<string, string> = {
   "配对链接": "Pairing link",
   "配对链接包含节点公钥与一次性票据。连接时完成 Noise IK 握手，之后只使用保存在安全存储中的设备密钥。":
     "The pairing link contains the node public key and a one-time ticket. Connecting performs a Noise IK handshake; afterwards only the device key in secure storage is used.",
+  "执行过程": "Process",
+  "执行了 {count} 个工具": "Used {count} tools",
+  "正在执行…": "Working…",
+  "执行失败": "The run failed",
+  "思考过程": "Reasoning",
+  "引导": "Steer",
+  "排队": "Queue",
+  "排队中": "Queued",
+  "移除排队消息": "Remove queued message",
+  "正在等待运行开始，暂时无法引导":
+    "The run is still starting; steering is not available yet.",
+  "当前没有进行中的执行，无法引导": "There is no active run to steer.",
+  "已插入引导，当前执行会收到这条消息":
+    "Guidance sent to the active run.",
+  "已加入队列，当前回复结束后自动发送":
+    "Queued; it will be sent when the current reply finishes.",
+  "运行中，可引导或排队": "Running — steer or queue your message",
+  "停止": "Stop",
+  "已停止当前执行": "Stopped the active run.",
+  "引导会插入当前执行；排队会在结束后发送":
+    "Steer adds guidance to the active run; queue sends after it finishes.",
 };

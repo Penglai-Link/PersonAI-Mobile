@@ -36,6 +36,8 @@ export const TRON_RPC_METHODS = {
   projectsList: "tron.projects.list",
   directoriesList: "tron.directories.list",
   sessionGroups: "tron.session.groups",
+  chatProtocolEvents: "tron.chat.protocolEvents",
+  chatSteer: "tron.chat.steer",
   navigationMenus: "tron.navigation.menus",
 } as const;
 
@@ -173,6 +175,17 @@ function workspaceParam(
 ): { workspaceCode: string } | undefined {
   const trimmed = workspaceCode?.trim();
   return trimmed ? { workspaceCode: trimmed } : undefined;
+}
+
+function scopeParam(
+  params: ApiParams,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    ...workspaceParam(params.workspaceCode),
+    ...(params.dudeCode?.trim() ? { dudeCode: params.dudeCode.trim() } : {}),
+    ...extra,
+  };
 }
 
 function readString(record: Record<string, unknown>, key: string): string | null {
@@ -543,6 +556,40 @@ export async function listSessionGroups(
     .filter((entry): entry is ChatSessionGroup => entry !== null);
 }
 
+/** `tron.chat.protocolEvents` — replay of AG-UI events for one session. */
+export async function listChatProtocolEvents(
+  params: ApiParams & { sessionCode: string },
+): Promise<AgUiEvent[]> {
+  const data = await callTron<unknown>(
+    params,
+    TRON_RPC_METHODS.chatProtocolEvents,
+    scopeParam(params, { sessionCode: params.sessionCode }),
+    20_000,
+  );
+  if (!Array.isArray(data)) return [];
+  return data
+    .filter((entry): entry is Record<string, unknown> => isRecord(entry))
+    .map((entry) => entry as AgUiEvent);
+}
+
+/** `tron.chat.steer` — inserts guidance into the active run. */
+export async function steerChatMessage(
+  params: ApiParams & { sessionCode: string; runId: string; content: string },
+): Promise<ChatMessage | null> {
+  const data = await callTron<unknown>(
+    params,
+    TRON_RPC_METHODS.chatSteer,
+    scopeParam(params, {
+      sessionCode: params.sessionCode,
+      runId: params.runId,
+      content: params.content,
+    }),
+    20_000,
+  );
+  if (!isRecord(data)) return null;
+  return normalizeSessionMessage(data.message, params.sessionCode);
+}
+
 /* ------------------------------------------------------------------ */
 /* Generic session.* methods (used by the chat screen)                 */
 /* ------------------------------------------------------------------ */
@@ -600,6 +647,8 @@ export interface StreamChatParams extends ApiParams {
   workspaceCode?: string;
   content: string;
   onDelta?: (delta: string) => void;
+  /** Every AG-UI event of the run, including tool and reasoning events. */
+  onEvent?: (event: AgUiEvent) => void;
 }
 
 /**
@@ -630,6 +679,7 @@ export async function sendChatMessageStream(
   let result: ChatSendResult = { messages: [] };
   try {
     for await (const event of stream.events) {
+      params.onEvent?.(event);
       const delta = aguiTextDelta(event);
       if (delta !== null) {
         params.onDelta?.(delta);
