@@ -14,6 +14,7 @@ import {
 
 import {
   ASSISTANT_SOURCE_TYPE,
+  listAssistants,
   listChatMessages,
   listChatProtocolEvents,
   sendChatMessageStream,
@@ -27,6 +28,7 @@ import { EmptyState } from "../components/EmptyState";
 import { InlineBanner } from "../components/InlineBanner";
 import { LoadingView } from "../components/LoadingView";
 import { MessageBubble as LocalMessageBubble } from "../components/MessageBubble";
+import { NodeLatencyText } from "../components/NodeLatency";
 import { RunProcess } from "../components/RunProcess";
 import { MessageBubble as AgentMessageBubble } from "@personai/agent-ui-chat-react-native";
 import type { ChatMessage as AgentChatMessage } from "@personai/agent-ui-chat-core/headless";
@@ -35,6 +37,7 @@ import { Ionicons } from "../components/icons";
 import { useI18n } from "../i18n";
 import type { RootStackParamList } from "../navigation/types";
 import { useNodeSession } from "../store/nodeSession";
+import { formatChatMarkdown } from "../utils/chatMarkdown";
 import {
   layout,
   radius,
@@ -59,19 +62,28 @@ interface QueuedChatMessage {
   content: string;
 }
 
-function toAgentMessage(message: ChatMessage, sessionCode: string): AgentChatMessage {
+function toAgentMessage(
+  message: ChatMessage,
+  sessionCode: string,
+  assistantName: string | null,
+): AgentChatMessage {
   const createdAt =
     typeof message.createdAt === "string"
       ? message.createdAt
       : new Date(message.createdAt).toISOString();
+  const isUser = message.role === "USER";
   return {
     id: message.id,
     messageId: message.messageCode ?? String(message.id),
     sessionId: sessionCode,
-    role: message.role === "USER" ? "USER" : "ASSISTANT",
+    role: isUser ? "USER" : "ASSISTANT",
     channel: message.channel ?? "MAIN_AGENT",
-    actor: message.actor ?? (message.role === "USER" ? "user" : "assistant"),
-    content: message.content,
+    actor: isUser
+      ? (message.actor ?? "user")
+      : assistantName?.trim() || message.actor || "assistant",
+    // Tables and fenced code use a nested ScrollView that breaks the Android
+    // transcript layout; see `formatChatMarkdown`.
+    content: isUser ? message.content : formatChatMarkdown(message.content),
     createdAt,
     ...(message.a2ui ? { a2ui: message.a2ui } : {}),
   };
@@ -85,6 +97,7 @@ export function ChatScreen({ navigation, route }: Props) {
     status: sessionStatus,
     error: sessionError,
     contentEpoch,
+    currentNode,
     request: sessionRequest,
     reportRequestError,
     probeNow,
@@ -117,12 +130,20 @@ export function ChatScreen({ navigation, route }: Props) {
     ((session.sourceType ?? "").toUpperCase() === ASSISTANT_SOURCE_TYPE
       ? (session.sourceCode ?? null)
       : null);
-  const assistantName = route.params.assistantName ?? null;
-  const title =
-    session.title?.trim() ||
-    (assistantName
-      ? format("与 {name} 的会话", { name: assistantName })
-      : t("新会话"));
+  const [resolvedAssistantName, setResolvedAssistantName] = useState<
+    string | null
+  >(route.params.assistantName ?? null);
+  const assistantName = resolvedAssistantName;
+  const assistantChat = Boolean(effectiveAssistantCode);
+  // Assistant sessions are titled with their assistant code on the node
+  // (`main-dude · Interactive`); the name is what belongs in the header.
+  const title = assistantChat
+    ? assistantName?.trim() || t("个人助手")
+    : session.title?.trim() ||
+      (assistantName
+        ? format("与 {name} 的会话", { name: assistantName })
+        : t("新会话"));
+  const nodeLabel = currentNode?.name?.trim() || t("节点");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -150,9 +171,52 @@ export function ChatScreen({ navigation, route }: Props) {
   /** Guards the one reload per online transition. */
   const onlineLoadedRef = useRef(false);
   const queuedRef = useRef<QueuedChatMessage[]>([]);
+  /** Assistant name lookup for sessions opened without one (drawer, running). */
+  const assistantLookupRef = useRef<string>("");
   const runMessageRef = useRef<(content: string) => Promise<void>>(
     async () => undefined,
   );
+
+  useEffect(() => {
+    const givenName = route.params.assistantName?.trim();
+    if (givenName) {
+      setResolvedAssistantName(givenName);
+      return;
+    }
+    if (!effectiveAssistantCode) {
+      setResolvedAssistantName(null);
+      return;
+    }
+    if (sessionStatus !== "online") return;
+
+    const key = `${effectiveAssistantCode}|${workspaceCode}`;
+    if (assistantLookupRef.current === key) return;
+    assistantLookupRef.current = key;
+    let cancelled = false;
+    void sessionRequest(({ tunnel }) =>
+      listAssistants({ tunnel, workspaceCode }),
+    )
+      .then((assistants) => {
+        if (cancelled) return;
+        const match = assistants.find(
+          (assistant) => assistant.assistantCode === effectiveAssistantCode,
+        );
+        setResolvedAssistantName(match?.name?.trim() || null);
+      })
+      .catch(() => {
+        // Let the next online transition try again.
+        if (assistantLookupRef.current === key) assistantLookupRef.current = "";
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    effectiveAssistantCode,
+    route.params.assistantName,
+    sessionRequest,
+    sessionStatus,
+    workspaceCode,
+  ]);
 
   useEffect(() => {
     queuedRef.current = queued;
@@ -318,6 +382,15 @@ export function ChatScreen({ navigation, route }: Props) {
   const scrollToBottom = useCallback((animated: boolean) => {
     listRef.current?.scrollToEnd({ animated });
   }, []);
+
+  // Virtualized rows (especially markdown) can finish measuring after the last
+  // content-size callback, which used to leave the transcript parked above the
+  // newest turn. One short deferred scroll settles it on the real bottom.
+  useEffect(() => {
+    if (!messages.length && !sending) return;
+    const timer = setTimeout(() => scrollToBottom(false), 120);
+    return () => clearTimeout(timer);
+  }, [messages, scrollToBottom, sending]);
 
   useEffect(() => {
     const subscription = Keyboard.addListener(
@@ -614,9 +687,20 @@ export function ChatScreen({ navigation, route }: Props) {
           <AppHeader
             title={title}
             subtitle={
-              assistantName
-                ? `${t("个人助手")} · ${assistantName}`
-                : t("会话", "chat")
+              assistantChat
+                ? nodeLabel
+                : assistantName
+                  ? `${t("个人助手")} · ${assistantName}`
+                  : t("会话", "chat")
+            }
+            subtitleAccessory={
+              assistantChat && currentNode ? (
+                <NodeLatencyText
+                  nodeId={currentNode.id}
+                  leadingSeparator="·"
+                  showPlaceholder
+                />
+              ) : null
             }
             onBack={() => navigation.goBack()}
             right={
@@ -710,7 +794,11 @@ export function ChatScreen({ navigation, route }: Props) {
                         </View>
                       ) : null}
                       <AgentMessageBubble
-                        message={toAgentMessage(item, sessionCode)}
+                        message={toAgentMessage(
+                          item,
+                          sessionCode,
+                          assistantName,
+                        )}
                         showIdentity={item.role === "ASSISTANT"}
                         theme={agentTheme}
                       />
@@ -762,7 +850,9 @@ export function ChatScreen({ navigation, route }: Props) {
                   ) : undefined
                 }
                 onContentSizeChange={() => {
-                  if (messages.length || sending) scrollToBottom(false);
+                  if (messages.length || sending) {
+                    requestAnimationFrame(() => scrollToBottom(false));
+                  }
                 }}
                 keyboardShouldPersistTaps="handled"
                 keyboardDismissMode="interactive"

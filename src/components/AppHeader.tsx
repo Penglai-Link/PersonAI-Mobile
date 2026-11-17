@@ -15,6 +15,8 @@ import { Ionicons } from "./icons";
 interface AppHeaderProps {
   title: string;
   subtitle?: string;
+  /** Inline detail after the subtitle, such as a latency reading. */
+  subtitleAccessory?: ReactNode;
   onBack?: () => void;
   right?: ReactNode;
   large?: boolean;
@@ -24,6 +26,7 @@ interface AppHeaderProps {
 export function AppHeader({
   title,
   subtitle,
+  subtitleAccessory,
   onBack,
   right,
   large = false,
@@ -53,10 +56,15 @@ export function AppHeader({
         >
           {title}
         </Text>
-        {subtitle ? (
-          <Text style={styles.subtitle} numberOfLines={1}>
-            {subtitle}
-          </Text>
+        {subtitle || subtitleAccessory ? (
+          <View style={styles.subtitleRow}>
+            {subtitle ? (
+              <Text style={styles.subtitle} numberOfLines={1}>
+                {subtitle}
+              </Text>
+            ) : null}
+            {subtitleAccessory}
+          </View>
         ) : null}
       </View>
 
@@ -99,7 +107,13 @@ const createStyles = (c: Palette) =>
     largeTitle: {
       ...typography.display,
     },
+    subtitleRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+    },
     subtitle: {
+      flexShrink: 1,
       color: c.muted,
       ...typography.caption,
     },
