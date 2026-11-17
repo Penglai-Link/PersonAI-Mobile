@@ -19,6 +19,7 @@ import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { LoadingView } from "../components/LoadingView";
+import { NodeLatencyText } from "../components/NodeLatency";
 import { Screen } from "../components/Screen";
 import { useI18n } from "../i18n";
 import { StatusDot } from "../components/StatusDot";
@@ -292,6 +293,11 @@ function NodeCard({
               {node.platform ? (
                 <Text style={styles.statusText}>· {node.platform}</Text>
               ) : null}
+              <NodeLatencyText
+                nodeId={node.id}
+                leadingSeparator="·"
+                style={styles.statusText}
+              />
             </View>
           </View>
         </View>

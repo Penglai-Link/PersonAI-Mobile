@@ -26,6 +26,7 @@ import {
   useConnections,
   type SavedNode,
 } from "./store/connections";
+import { NodeLatencyProvider } from "./store/nodeLatency";
 import { NodeSessionProvider } from "./store/nodeSession";
 import { ThemeProvider, useTheme } from "./theme";
 
@@ -174,11 +175,13 @@ export default function App() {
       <LanguageProvider>
         <ConnectionsProvider>
           <NodeSessionProvider>
-            <ThemeProvider>
-              <DrawerProvider>
-                <AppNavigator />
-              </DrawerProvider>
-            </ThemeProvider>
+            <NodeLatencyProvider>
+              <ThemeProvider>
+                <DrawerProvider>
+                  <AppNavigator />
+                </DrawerProvider>
+              </ThemeProvider>
+            </NodeLatencyProvider>
           </NodeSessionProvider>
         </ConnectionsProvider>
       </LanguageProvider>

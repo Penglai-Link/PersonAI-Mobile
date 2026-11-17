@@ -85,6 +85,12 @@ export interface TunnelEndpoint {
   transport: NodeTransport;
 }
 
+/** A verified tunnel plus the heartbeat round trip that proved it alive. */
+interface VerifiedTunnel {
+  tunnel: SecureTunnel;
+  latencyMs: number;
+}
+
 /** Ordered candidates: LAN first, then public, then the stored active URL. */
 export function tunnelEndpoints(target: TunnelTarget): TunnelEndpoint[] {
   const urls = [
@@ -1359,12 +1365,12 @@ export class SecureTunnelPool {
     target: TunnelTarget,
     timeoutMs: number,
     handshakeTimeoutFor: (endpoint: TunnelEndpoint) => number,
-  ): Promise<SecureTunnel> {
+  ): Promise<VerifiedTunnel> {
     const cached = this.liveTunnelFor(target);
     if (cached) {
       try {
-        await cached.ping(timeoutMs);
-        return cached;
+        const latencyMs = await cached.ping(timeoutMs);
+        return { tunnel: cached, latencyMs };
       } catch {
         cached.close();
         this.dropTunnel(cached);
@@ -1381,15 +1387,16 @@ export class SecureTunnelPool {
           { ...target, ...endpoint },
           handshakeTimeoutFor(endpoint),
         );
+        let latencyMs: number;
         try {
-          await tunnel.ping(timeoutMs);
+          latencyMs = await tunnel.ping(timeoutMs);
         } catch (error) {
           tunnel.close();
           this.dropTunnel(tunnel);
           throw error;
         }
         this.noteEndpointSuccess(target, endpoint);
-        return tunnel;
+        return { tunnel, latencyMs };
       } catch (error) {
         this.noteEndpointFailure(target, endpoint);
         lastError = error;
@@ -1405,7 +1412,7 @@ export class SecureTunnelPool {
     timeoutMs = 1_200,
   ): Promise<TunnelEndpoint | null> {
     try {
-      const tunnel = await this.connectVerified(
+      const { tunnel } = await this.connectVerified(
         target,
         timeoutMs,
         (endpoint) => this.handshakeTimeoutFor(endpoint, 6_000, timeoutMs),
@@ -1425,11 +1432,29 @@ export class SecureTunnelPool {
     target: TunnelTarget,
     timeoutMs = 5_000,
   ): Promise<SecureTunnel> {
-    return this.connectVerified(
+    const { tunnel } = await this.connectVerified(
       target,
       timeoutMs,
       (endpoint) => this.handshakeTimeoutFor(endpoint, 8_000, timeoutMs),
     );
+    return tunnel;
+  }
+
+  /**
+   * Measures one heartbeat round trip against a node, reusing a live tunnel
+   * when one exists. A fresh handshake is not included in the returned number,
+   * so the value reflects the network path rather than pairing latency.
+   */
+  async measureLatency(
+    target: TunnelTarget,
+    timeoutMs = 4_000,
+  ): Promise<number> {
+    const { latencyMs } = await this.connectVerified(
+      target,
+      timeoutMs,
+      (endpoint) => this.handshakeTimeoutFor(endpoint, 8_000, timeoutMs),
+    );
+    return latencyMs;
   }
 
   private handshakeTimeoutFor(

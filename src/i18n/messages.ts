@@ -80,6 +80,8 @@ export const enMessages: Record<string, string> = {
   "已扫描": "Scanned",
   "已识别配对信息": "Pairing details recognized",
   "已阻止": "Blocked",
+  "延迟 {value} 毫秒": "Latency {value} ms",
+  "延迟未知": "Latency unavailable",
   "开始对话": "Start conversation",
   "当前": "Current",
   "当前环境不支持流式响应，正在切换为普通发送模式。":

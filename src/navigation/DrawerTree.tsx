@@ -12,6 +12,7 @@ import {
   type ChatSession,
   type NavigationMenu,
 } from "../api/tron";
+import { NodeLatencyText } from "../components/NodeLatency";
 import { StatusDot } from "../components/StatusDot";
 import { Ionicons } from "../components/icons";
 import { useI18n } from "../i18n";
@@ -662,6 +663,11 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
                           {node.baseUrl}
                         </Text>
                       </View>
+                      <NodeLatencyText
+                        nodeId={node.id}
+                        showPlaceholder
+                        style={styles.nodeLatency}
+                      />
                       {state?.status === "loading" ? (
                         <ActivityIndicator
                           size="small"
@@ -773,6 +779,10 @@ const createStyles = (c: Palette) =>
       color: c.muted,
       fontSize: 9,
       letterSpacing: 0.2,
+    },
+    nodeLatency: {
+      marginLeft: spacing.xs,
+      fontSize: 9,
     },
     nodeBody: {
       paddingLeft: spacing.xl + spacing.md,
