@@ -512,6 +512,7 @@ export const enMessages: Record<string, string> = {
   "上一步": "Back",
   "下一步": "Next",
   "继续": "Continue",
+  "确认": "Confirm",
   "继续中…": "Continuing…",
   "其他": "Other",
   "输入自定义回答": "Type a custom answer",

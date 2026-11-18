@@ -19,6 +19,7 @@ import {
   type AgUiEvent,
   type SessionSummary,
 } from "./rpc";
+import type { ChatUserInputAnswer, ChatUserInputRequest } from "@personai/agent-ui-chat-core/headless";
 import type { SecureTunnel } from "./tunnel";
 import { translate } from "../i18n";
 
@@ -42,6 +43,7 @@ export const TRON_RPC_METHODS = {
   chatProtocolEvents: "tron.chat.protocolEvents",
   chatSteer: "tron.chat.steer",
   chatAnswerUserInput: "tron.chat.answerUserInput",
+  chatUserInputRequests: "tron.chat.userInputRequests",
   chatA2uiState: "tron.chat.a2uiState",
   chatA2uiAction: "tron.chat.a2uiAction",
   navigationMenus: "tron.navigation.menus",
@@ -619,7 +621,7 @@ export async function answerChatUserInput(
   const data = await callTron<unknown>(
     params,
     TRON_RPC_METHODS.chatAnswerUserInput,
-    {
+    scopeParam(params, {
       sessionCode: params.sessionCode,
       requestCode: params.requestCode,
       answers: params.answers ?? [],
@@ -628,7 +630,7 @@ export async function answerChatUserInput(
         ? { a2uiMetadata: params.a2uiMetadata }
         : {}),
       clientCapabilities: { userInputRequests: true },
-    },
+    }),
     180_000,
   );
   return Array.isArray(data)
@@ -636,6 +638,112 @@ export async function answerChatUserInput(
         .filter((entry): entry is Record<string, unknown> => isRecord(entry))
         .map((entry) => entry as AgUiEvent)
     : [];
+}
+
+function normalizeUserInputRequest(
+  value: unknown,
+  sessionCode: string,
+): ChatUserInputRequest | null {
+  if (!isRecord(value)) return null;
+  const requestId =
+    readString(value, "requestCode") ?? readString(value, "requestId");
+  if (!requestId) return null;
+  const questions = Array.isArray(value.questions)
+    ? value.questions
+        .filter((entry): entry is Record<string, unknown> => isRecord(entry))
+        .map((question) => ({
+          questionId: String(
+            readString(question, "questionCode") ??
+              readString(question, "questionId") ??
+              readScalar(question, "id") ??
+              "",
+          ),
+          question: readString(question, "question") ?? "",
+          options: Array.isArray(question.options)
+            ? question.options
+                .filter((entry): entry is Record<string, unknown> => isRecord(entry))
+                .map((option) => ({
+                  optionId: String(
+                    readString(option, "optionCode") ??
+                      readString(option, "optionId") ??
+                      readScalar(option, "id") ??
+                      "",
+                  ),
+                  label: readString(option, "label") ?? "",
+                  description: readString(option, "description") ?? undefined,
+                }))
+            : [],
+          allowCustomAnswer: true,
+          allowSkip: true,
+        }))
+    : [];
+  const answers = Array.isArray(value.answers)
+    ? value.answers
+        .filter((entry): entry is Record<string, unknown> => isRecord(entry))
+        .map((answer) => ({
+          questionId: String(
+            readString(answer, "questionCode") ??
+              readString(answer, "questionId") ??
+              "",
+          ),
+          answerKind:
+            readString(answer, "answerKind") === "Option"
+              ? ("Option" as const)
+              : readString(answer, "answerKind") === "Skipped"
+                ? ("Skipped" as const)
+                : ("Other" as const),
+          optionId:
+            readString(answer, "optionCode") ??
+            readString(answer, "optionId") ??
+            null,
+          otherText: readString(answer, "otherText") ?? null,
+        }))
+    : null;
+  const status = readString(value, "status") === "Answered" ? "Answered" : "Pending";
+  return {
+    requestId,
+    sessionId: readString(value, "sessionCode") ?? sessionCode,
+    runId: readString(value, "runCode") ?? "",
+    assistantMessageId: readString(value, "assistantMessageCode"),
+    intro: readString(value, "intro") ?? "",
+    questions,
+    answers,
+    status,
+    requestedAt:
+      typeof value.requestedAt === "number" ? value.requestedAt : Date.now(),
+    answeredAt:
+      typeof value.answeredAt === "number" ? value.answeredAt : null,
+    ...(status === "Pending" && questions.length
+      ? {
+          nativeInteraction: {
+            questionnaire: true,
+            reason: "input_required",
+            responseSchema: {},
+            optionPayloads: {},
+          },
+        }
+      : {}),
+  };
+}
+
+/** `tron.chat.userInputRequests` — durable answered/pending interaction history. */
+export async function listChatUserInputRequests(
+  params: ApiParams & { sessionCode: string },
+): Promise<ChatUserInputRequest[]> {
+  const data = await callTron<unknown>(
+    params,
+    TRON_RPC_METHODS.chatUserInputRequests,
+    scopeParam(params, { sessionCode: params.sessionCode }),
+    20_000,
+  );
+  const source = Array.isArray(data)
+    ? data
+    : isRecord(data) && Array.isArray(data.data)
+      ? data.data
+      : [];
+  return source
+    .map((entry) => normalizeUserInputRequest(entry, params.sessionCode))
+    .filter((entry): entry is ChatUserInputRequest => entry !== null);
 }
 
 /** Canonical A2UI state used to hydrate native surfaces and actions. */
@@ -652,7 +760,7 @@ export async function getChatA2uiState(
   const data = await callTron<unknown>(
     params,
     TRON_RPC_METHODS.chatA2uiState,
-    { sessionCode: params.sessionCode },
+    scopeParam(params, { sessionCode: params.sessionCode }),
     20_000,
   );
   if (!isRecord(data)) return null;
@@ -690,14 +798,14 @@ export async function runChatA2uiAction(
   const data = await callTron<unknown>(
     params,
     TRON_RPC_METHODS.chatA2uiAction,
-    {
+    scopeParam(params, {
       sessionCode: params.sessionCode,
       actionId: params.actionId,
       surfaceInstanceId: params.surfaceInstanceId,
       expectedRevision: params.expectedRevision,
       message: params.message,
       metadata: params.metadata,
-    },
+    }),
     180_000,
   );
   return Array.isArray(data)
