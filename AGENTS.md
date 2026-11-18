@@ -10,7 +10,10 @@ PersonAI Mobile 的 Expo + React Native 移动端，目录与 Tron 主仓库同�
 - 导航使用 `@react-navigation/native` + native-stack，不使用 Expo Router。顶层导航壳是自绘
   侧滑菜单（`src/navigation/Drawer.tsx`），不要引入需要原生重建的 drawer 依赖。
 - 远程网络使用 WebSocket + Noise IK（`src/api/tunnel.ts`）；业务统一走 RPC，不使用 `expo/fetch` 业务请求，也不再有 SSE 直连。
-- 本机没有完整 Xcode / Android SDK。需要原生包时使用 EAS Build，不要手写 `ios/` 或 `android/`。
+- 本机已装完整 Xcode 27.2、Android SDK（`ANDROID_HOME=/opt/homebrew/share/android-commandlinetools`）、
+  JDK 21 与 Gradle，原生包可本机构建：Android 用 `cd android && ./gradlew assembleRelease`
+  （产物 `android/app/build/outputs/apk/release/app-release.apk`）；需要云端或团队分发产物时再用
+  EAS Build。`ios/`、`android/` 由 prebuild 生成且已 gitignore，不要手写。
 
 ## 架构约束
 
