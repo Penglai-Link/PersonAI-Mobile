@@ -276,12 +276,3 @@ export function buildRunTraces(events: AgUiEvent[]): Map<string, RunTrace> {
   }
   return traces;
 }
-
-/** A run with no tool or reasoning output is a plain reply, not a process. */
-export function hasRunTraceDetails(trace: RunTrace): boolean {
-  return (
-    trace.tools.length > 0 ||
-    trace.reasoning.trim().length > 0 ||
-    trace.status === "failed"
-  );
-}

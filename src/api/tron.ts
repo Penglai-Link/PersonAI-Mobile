@@ -42,12 +42,14 @@ export const TRON_RPC_METHODS = {
   sessionGroups: "tron.session.groups",
   chatProtocolEvents: "tron.chat.protocolEvents",
   chatSteer: "tron.chat.steer",
+  chatSetWorkingDirectory: "tron.chat.setWorkingDirectory",
   chatAnswerUserInput: "tron.chat.answerUserInput",
   chatUploadAttachment: "tron.chat.uploadAttachment",
   chatUserInputRequests: "tron.chat.userInputRequests",
   chatA2uiState: "tron.chat.a2uiState",
   chatA2uiAction: "tron.chat.a2uiAction",
   navigationMenus: "tron.navigation.menus",
+  modelsSelectOptions: "tron.models.selectOptions",
 } as const;
 
 /** A chat sidebar widget defined by the product's navigation menu. */
@@ -128,6 +130,8 @@ export interface ChatSession {
   workspaceCode: string | null;
   projectCode?: string | null;
   directoryCode?: string | null;
+  /** Directory the session currently runs in (`null` = workspace default). */
+  workingDirectoryCode?: string | null;
   title: string;
   status: string;
   sourceType?: string | null;
@@ -244,6 +248,9 @@ export function normalizeChatSession(
     projectCode: readString(value, "projectCode") ?? readString(metadata, "projectCode"),
     directoryCode:
       readString(value, "directoryCode") ?? readString(metadata, "directoryCode"),
+    workingDirectoryCode:
+      readString(value, "workingDirectoryCode") ??
+      readString(metadata, "workingDirectoryCode"),
     title: readString(value, "title") ?? "",
     status: readString(value, "status") ?? "",
     sourceType: readString(value, "sourceType") ?? readString(metadata, "sourceType"),
@@ -403,6 +410,171 @@ function normalizeGroup(value: unknown): ChatSessionGroup | null {
     sourceCode: typeof value.sourceCode === "string" ? value.sourceCode : null,
     sessions,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Model catalog                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Model selection as the node defines it. The server owns this vocabulary; the
+ * app only passes the value it received from `tron.models.selectOptions`.
+ */
+export interface ModelSelection {
+  kind: "Auto" | "Fixed" | "ProviderRoute" | string;
+  providerCode?: string | null;
+  modelCode?: string | null;
+  qualityType?: string | null;
+  routeCode?: string | null;
+}
+
+export type ReasoningEffort =
+  | "None"
+  | "Minimal"
+  | "Low"
+  | "Medium"
+  | "High"
+  | "XHigh"
+  | "Max"
+  | "Ultra";
+
+export const REASONING_EFFORTS: readonly ReasoningEffort[] = [
+  "None",
+  "Minimal",
+  "Low",
+  "Medium",
+  "High",
+  "XHigh",
+  "Max",
+  "Ultra",
+];
+
+/** One entry of the desktop composer's model menu. */
+export interface ModelSelectOption {
+  optionCode: string;
+  /** Runtime code the node accepted before selections existed. */
+  modelCode: string;
+  displayName: string;
+  modelName: string;
+  /** `TEXT`, `EMBEDDING`, `RERANK`, ... — only text models are chattable. */
+  modelType: string;
+  enabled: boolean;
+  /** Server-owned selection; this is what `session.sendMessage` forwards. */
+  modelSelection: ModelSelection | null;
+  providerCode: string | null;
+  accessPlatform: string | null;
+  upstreamVendorName: string | null;
+  vendor: string | null;
+  qualityType: "High" | "Middle" | "Low" | string | null;
+  contextWindowTokens: number | null;
+  /** Billing multiplier shown next to fixed Person-AI models. */
+  outputCoefficient: number | null;
+  supportedReasoningEfforts: ReasoningEffort[];
+  defaultReasoningEffort: ReasoningEffort | null;
+  isDefault: boolean;
+}
+
+function readModelSelection(value: unknown): ModelSelection | null {
+  if (!isRecord(value)) return null;
+  const kind = readString(value, "kind");
+  if (!kind) return null;
+  return {
+    kind,
+    providerCode: readString(value, "providerCode"),
+    modelCode: readString(value, "modelCode"),
+    qualityType: readString(value, "qualityType"),
+    routeCode: readString(value, "routeCode"),
+  };
+}
+
+function readEffort(value: unknown): ReasoningEffort | null {
+  if (typeof value !== "string") return null;
+  return (REASONING_EFFORTS as readonly string[]).includes(value)
+    ? (value as ReasoningEffort)
+    : null;
+}
+
+function normalizeModelOption(value: unknown): ModelSelectOption | null {
+  if (!isRecord(value)) return null;
+  const optionCode = readString(value, "optionCode");
+  const displayName = readString(value, "displayName");
+  if (!optionCode || !displayName) return null;
+  return {
+    optionCode,
+    modelCode: readString(value, "modelCode") ?? "",
+    displayName,
+    modelName: readString(value, "modelName") ?? "",
+    modelType: readString(value, "modelType") ?? "TEXT",
+    enabled: value.enabled !== false,
+    modelSelection: readModelSelection(value.modelSelection),
+    providerCode: readString(value, "providerCode"),
+    accessPlatform: readString(value, "accessPlatform"),
+    upstreamVendorName: readString(value, "upstreamVendorName"),
+    vendor: readString(value, "vendor"),
+    qualityType: readString(value, "qualityType"),
+    contextWindowTokens:
+      typeof value.contextWindowTokens === "number"
+        ? value.contextWindowTokens
+        : null,
+    outputCoefficient:
+      typeof value.outputCoefficient === "number" &&
+      Number.isFinite(value.outputCoefficient)
+        ? value.outputCoefficient
+        : null,
+    supportedReasoningEfforts: Array.isArray(value.supportedReasoningEfforts)
+      ? value.supportedReasoningEfforts
+          .map(readEffort)
+          .filter((entry): entry is ReasoningEffort => entry !== null)
+      : [],
+    defaultReasoningEffort: readEffort(value.defaultReasoningEffort),
+    isDefault: value.isDefault === true,
+  };
+}
+
+/** True for the node's "对话自动路由" option (Auto or Person-AI ChatAuto). */
+export function isAutoModelOption(option: ModelSelectOption): boolean {
+  const selection = option.modelSelection;
+  return (
+    selection?.kind === "Auto" ||
+    (selection?.kind === "ProviderRoute" && selection.routeCode === "ChatAuto")
+  );
+}
+
+/**
+ * Picks the option the desktop composer starts with: the auto route first, then
+ * the node's default, then the first enabled option.
+ */
+export function defaultModelOption(
+  options: ModelSelectOption[],
+): ModelSelectOption | null {
+  const enabled = options.filter((option) => option.enabled);
+  return (
+    enabled.find(isAutoModelOption) ??
+    enabled.find((option) => option.isDefault) ??
+    enabled[0] ??
+    options[0] ??
+    null
+  );
+}
+
+/** `tron.models.selectOptions` — models the desktop composer offers. */
+export async function listModelSelectOptions(
+  params: ApiParams,
+): Promise<ModelSelectOption[]> {
+  const data = await callTron<unknown>(
+    params,
+    TRON_RPC_METHODS.modelsSelectOptions,
+    workspaceParam(params.workspaceCode),
+  );
+  if (!Array.isArray(data)) return [];
+  return data
+    .map((entry) => normalizeModelOption(entry))
+    // The node lists every model class; the composer only ever chats with text
+    // models, exactly like the desktop selector.
+    .filter(
+      (entry): entry is ModelSelectOption =>
+        entry !== null && entry.modelType.toUpperCase() === "TEXT",
+    );
 }
 
 /* ------------------------------------------------------------------ */
@@ -609,6 +781,27 @@ export async function steerChatMessage(
   );
   if (!isRecord(data)) return null;
   return normalizeSessionMessage(data.message, params.sessionCode);
+}
+
+/**
+ * `tron.chat.setWorkingDirectory` — moves the session to a directory of its
+ * workspace (`null` clears the override). Mirrors the desktop composer's
+ * working-directory control.
+ */
+export async function setChatWorkingDirectory(
+  params: ApiParams & { sessionCode: string; directoryCode: string | null },
+): Promise<ChatSession | null> {
+  const data = await callTron<unknown>(
+    params,
+    TRON_RPC_METHODS.chatSetWorkingDirectory,
+    scopeParam(params, {
+      sessionCode: params.sessionCode,
+      directoryCode: params.directoryCode,
+    }),
+    20_000,
+  );
+  if (!isRecord(data)) return null;
+  return normalizeChatSession(data, translate("电脑没有返回有效的会话"));
 }
 
 /** `tron.chat.answerUserInput` — resumes an ask-user/approval pause. */
@@ -893,15 +1086,31 @@ export async function runChatA2uiAction(
 /* Generic session.* methods (used by the chat screen)                 */
 /* ------------------------------------------------------------------ */
 
-/** `session.create` — starts a new chat session. */
+/**
+ * `session.create` — starts a new chat session. A session started from a
+ * project/directory group keeps that context, so it is listed under the group
+ * it was created from instead of falling back to "随聊".
+ */
 export async function createChatSession(
-  params: ApiParams & { workspaceCode: string },
+  params: ApiParams & {
+    workspaceCode: string;
+    projectCode?: string | null;
+    directoryCode?: string | null;
+    workingDirectoryCode?: string | null;
+  },
 ): Promise<ChatSession> {
   const rpc = new SessionRpc(params.tunnel);
   const summary: SessionSummary = await rpc.create(
     {
       workspace: params.workspaceCode,
-      metadata: { workspaceCode: params.workspaceCode },
+      metadata: {
+        workspaceCode: params.workspaceCode,
+        ...(params.projectCode ? { projectCode: params.projectCode } : {}),
+        ...(params.directoryCode ? { directoryCode: params.directoryCode } : {}),
+        ...(params.workingDirectoryCode
+          ? { workingDirectoryCode: params.workingDirectoryCode }
+          : {}),
+      },
     },
     { signal: params.signal, timeoutMs: 20_000 },
   );
@@ -917,9 +1126,11 @@ export async function listChatMessages(
     {
       sessionId: params.sessionCode,
       limit: 200,
-      metadata: params.assistantCode
-        ? { assistantCode: params.assistantCode }
-        : undefined,
+      // Sessions live inside one workspace; the node scopes its read by it.
+      metadata: {
+        ...(params.workspaceCode ? { workspaceCode: params.workspaceCode } : {}),
+        ...(params.assistantCode ? { assistantCode: params.assistantCode } : {}),
+      },
     },
     { signal: params.signal, timeoutMs: 20_000 },
   );
@@ -929,16 +1140,21 @@ export async function listChatMessages(
 
 /** `session.stopRun` — cancels the active run (optionally one specific run). */
 export async function stopChatRun(
-  params: ApiParams & { sessionCode: string; runId?: string | null },
+  params: ApiParams & {
+    sessionCode: string;
+    runId?: string | null;
+    workspaceCode?: string;
+  },
 ): Promise<boolean> {
   const rpc = new SessionRpc(params.tunnel);
   const result = await rpc.stopRun(
     {
       sessionId: params.sessionCode,
       runId: params.runId ?? null,
-      metadata: params.assistantCode
-        ? { assistantCode: params.assistantCode }
-        : undefined,
+      metadata: {
+        ...(params.workspaceCode ? { workspaceCode: params.workspaceCode } : {}),
+        ...(params.assistantCode ? { assistantCode: params.assistantCode } : {}),
+      },
     },
     { signal: params.signal, timeoutMs: 15_000 },
   );
@@ -950,6 +1166,9 @@ export interface StreamChatParams extends ApiParams {
   workspaceCode?: string;
   content: string;
   attachments?: unknown[];
+  /** Server-owned model selection; omit only for nodes without a catalog. */
+  modelSelection?: ModelSelection | null;
+  reasoningEffort?: ReasoningEffort | null;
   onDelta?: (delta: string) => void;
   /** Every AG-UI event of the run, including tool and reasoning events. */
   onEvent?: (event: AgUiEvent) => void;
@@ -973,6 +1192,14 @@ export async function sendChatMessageStream(
       content: params.content,
       ...(params.attachments?.length ? { attachments: params.attachments } : {}),
       clientCapabilities: { userInputRequests: true },
+      // The node requires an explicit selection to run its auto-model router;
+      // without it the run starts against a placeholder route with no budget.
+      ...(params.modelSelection
+        ? { modelSelection: params.modelSelection as unknown as Record<string, unknown> }
+        : {}),
+      ...(params.reasoningEffort
+        ? { reasoningEffort: params.reasoningEffort }
+        : {}),
       metadata: {
         workspaceCode: params.workspaceCode ?? null,
         assistantCode: params.assistantCode ?? null,

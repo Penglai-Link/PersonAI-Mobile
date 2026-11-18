@@ -7,6 +7,7 @@ import {
   View,
 } from "react-native";
 import { ToolCard } from "@personai/agent-ui-chat-react-native";
+import type { AguiRunNotice } from "@personai/agent-ui-chat-core/headless";
 
 import { useI18n } from "../i18n";
 import {
@@ -18,16 +19,16 @@ import {
   type Palette,
 } from "../theme";
 import { Ionicons } from "./icons";
-import {
-  hasRunTraceDetails,
-  type RunToolTrace,
-  type RunTrace,
-} from "../utils/runTrace";
+import { RunNotice, type RunNoticeLabels } from "./RunNotice";
+import type { RunToolTrace, RunTrace } from "../utils/runTrace";
 
 interface RunProcessProps {
   trace: RunTrace;
   /** Live runs stay expanded; finished runs collapse to a summary. */
   live?: boolean;
+  /** Lifecycle notices (failure/stop/compaction) of the same run. */
+  notices?: AguiRunNotice[];
+  noticeLabels: RunNoticeLabels;
 }
 
 function toolStatus(tool: RunToolTrace): "Running" | "Completed" | "Failed" {
@@ -36,7 +37,12 @@ function toolStatus(tool: RunToolTrace): "Running" | "Completed" | "Failed" {
   return "Completed";
 }
 
-export function RunProcess({ trace, live = false }: RunProcessProps) {
+export function RunProcess({
+  trace,
+  live = false,
+  notices,
+  noticeLabels,
+}: RunProcessProps) {
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
   const { t, format, language } = useI18n();
@@ -46,16 +52,29 @@ export function RunProcess({ trace, live = false }: RunProcessProps) {
     if (live || trace.status === "failed") setExpanded(true);
   }, [live, trace.status]);
 
-  if (!live && !hasRunTraceDetails(trace)) return null;
+  // Same source as the web work rail: lifecycle notices come from the run's
+  // AG-UI events; a persisted trace without them still reports its error.
+  const renderedNotices: AguiRunNotice[] = notices?.length
+    ? notices
+    : trace.status === "failed" && trace.error
+      ? [{ kind: "runError", code: "", message: trace.error }]
+      : [];
+  const hasDetails =
+    trace.tools.length > 0 || trace.reasoning.trim().length > 0;
+
+  if (!live && !hasDetails) {
+    // Nothing to expand: the run's lifecycle notice is the whole rail.
+    return renderedNotices.length ? (
+      <RunNotice labels={noticeLabels} notices={renderedNotices} />
+    ) : null;
+  }
 
   const toolCount = trace.tools.length;
   const summary = toolCount
     ? format("执行了 {count} 个工具", { count: toolCount })
     : trace.reasoning.trim()
       ? t("思考过程")
-      : trace.status === "failed"
-        ? t("执行失败")
-        : t("执行过程");
+      : t("执行过程");
 
   const statusColor =
     trace.status === "failed"
@@ -69,7 +88,7 @@ export function RunProcess({ trace, live = false }: RunProcessProps) {
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={t("执行过程")}
-        accessibilityState={{ expanded }}
+        accessibilityState={{ expanded: live || expanded }}
         onPress={() => setExpanded((value) => !value)}
         style={({ pressed }) => [styles.header, pressed && styles.pressed]}
       >
@@ -96,7 +115,13 @@ export function RunProcess({ trace, live = false }: RunProcessProps) {
         )}
       </Pressable>
 
-      {expanded ? (
+      {renderedNotices.length ? (
+        <View style={styles.notices}>
+          <RunNotice labels={noticeLabels} notices={renderedNotices} plain />
+        </View>
+      ) : null}
+
+      {expanded && hasDetails ? (
         <View style={styles.body}>
           {trace.reasoning.trim() ? (
             <View style={styles.reasoning}>
@@ -131,9 +156,6 @@ export function RunProcess({ trace, live = false }: RunProcessProps) {
               }}
             />
           ))}
-          {trace.error ? (
-            <Text style={styles.error}>{trace.error}</Text>
-          ) : null}
         </View>
       ) : null}
     </View>
@@ -168,6 +190,10 @@ const createStyles = (c: Palette) =>
       color: c.muted,
       ...typography.caption,
     },
+    notices: {
+      paddingHorizontal: spacing.sm,
+      paddingBottom: spacing.sm,
+    },
     body: {
       gap: spacing.sm,
       paddingHorizontal: spacing.sm,
@@ -185,11 +211,6 @@ const createStyles = (c: Palette) =>
       color: c.muted,
       ...typography.caption,
       lineHeight: 18,
-    },
-    error: {
-      color: c.danger,
-      ...typography.caption,
-      paddingHorizontal: spacing.xs,
     },
     pressed: {
       opacity: 0.7,

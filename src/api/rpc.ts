@@ -68,6 +68,14 @@ export interface SessionSendMessageParams {
   content: string;
   attachments?: unknown[];
   clientCapabilities?: Record<string, unknown>;
+  /**
+   * Product-owned model selection. The framework passes it through untouched;
+   * the pack forwards it to the node so a run uses the same model the desktop
+   * composer picked instead of a placeholder route.
+   */
+  modelSelection?: Record<string, unknown> | null;
+  /** Reasoning effort name (`Low`, `High`, ...), product-owned vocabulary. */
+  reasoningEffort?: string | null;
   metadata?: Record<string, unknown>;
 }
 

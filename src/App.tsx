@@ -110,6 +110,7 @@ function AppNavigator() {
       node: SavedNode,
       session: ChatSession,
       workspaceCode: string,
+      workspaceLabel: string | null,
     ) => {
       closeDrawer();
       selectNode(node);
@@ -119,6 +120,7 @@ function AppNavigator() {
       navigationRef.navigate("Chat", {
         session,
         workspaceCode: workspaceCode || session.workspaceCode || "",
+        workspaceLabel,
         assistantCode: isAssistant ? (session.sourceCode ?? null) : null,
         assistantName: null,
       });

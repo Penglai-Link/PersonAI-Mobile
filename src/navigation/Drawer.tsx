@@ -107,6 +107,7 @@ interface AppDrawerProps {
     node: SavedNode,
     session: ChatSession,
     workspaceCode: string,
+    workspaceLabel: string | null,
   ) => void;
 }
 

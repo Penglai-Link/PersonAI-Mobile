@@ -12,6 +12,8 @@ export type RootStackParamList = {
   Chat: {
     session: ChatSession;
     workspaceCode: string;
+    /** Workspace display name, shown as a tag on the session title. */
+    workspaceLabel?: string | null;
     assistantCode?: string | null;
     assistantName?: string | null;
   };

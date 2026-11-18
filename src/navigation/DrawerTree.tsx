@@ -45,6 +45,7 @@ interface DrawerTreeProps {
     node: SavedNode,
     session: ChatSession,
     workspaceCode: string,
+    workspaceLabel: string | null,
   ) => void;
 }
 
@@ -69,6 +70,9 @@ interface TreeSubgroup {
   key: string;
   label: string;
   sessions: TreeSession[];
+  /** `projectCode` of a topic subgroup or `directoryCode` of a directory one. */
+  projectCode?: string;
+  directoryCode?: string;
 }
 
 interface TreeWorkspace {
@@ -84,8 +88,6 @@ type NodeTreeState =
   | {
       status: "ready";
       workspaces: TreeWorkspace[];
-      /** First active workspace; where a node-level new session is created. */
-      defaultWorkspaceCode: string | null;
     };
 
 function sortByUpdatedDesc(left: TreeSession, right: TreeSession): number {
@@ -132,6 +134,7 @@ function buildMenuGroups(
       const subgroups = workspace.projects.map((project) => ({
         key: `project:${project.projectCode}`,
         label: project.name || project.projectCode,
+        projectCode: project.projectCode,
         sessions: manualSessions
           .filter(
             (item) => item.session.projectCode === project.projectCode,
@@ -150,6 +153,7 @@ function buildMenuGroups(
       const subgroups = workspace.directories.map((directory) => ({
         key: `directory:${directory.directoryCode}`,
         label: directory.name || directory.path || directory.directoryCode,
+        directoryCode: directory.directoryCode,
         sessions: manualSessions
           .filter(
             (item) => item.session.directoryCode === directory.directoryCode,
@@ -225,13 +229,14 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
   const [nodeStates, setNodeStates] = useState<Record<string, NodeTreeState>>(
     {},
   );
-  const [creatingNodeId, setCreatingNodeId] = useState<string | null>(null);
+  /** `${nodeId}:${workspaceCode}:${groupKey}` of the group creating a session. */
+  const [creatingKey, setCreatingKey] = useState<string | null>(null);
   const [createError, setCreateError] = useState<{
     nodeId: string;
     message: string;
   } | null>(null);
   const wasActiveRef = useRef(false);
-  /** Guards double taps before `creatingNodeId` reaches the next render. */
+  /** Guards double taps before `creatingKey` reaches the next render. */
   const creatingRef = useRef(false);
 
   // Session metadata is memory-only conversation content: drop it when the
@@ -299,7 +304,6 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
           [node.id]: {
             status: "ready",
             workspaces: buildNodeWorkspaces(node, overview, menus),
-            defaultWorkspaceCode: overview.defaultWorkspaceCode,
           },
         }));
       } catch (error) {
@@ -322,44 +326,46 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
    * `onOpenSession` then selects that node and opens the new session.
    */
   const createSession = useCallback(
-    async (node: SavedNode) => {
+    async (
+      node: SavedNode,
+      workspace: TreeWorkspace,
+      groupKey: string,
+      context: { projectCode?: string; directoryCode?: string } = {},
+    ) => {
       if (creatingRef.current) return;
       creatingRef.current = true;
-      setCreatingNodeId(node.id);
+      setCreatingKey(`${node.id}:${workspace.workspaceCode}:${groupKey}`);
       setCreateError(null);
       try {
-        const state = nodeStates[node.id];
-        let workspaceCode =
-          state?.status === "ready" ? state.defaultWorkspaceCode : null;
-        // A collapsed node has no overview yet; read just the workspace list.
-        if (state?.status !== "ready") {
-          const overview = await loadNodeOverview(node, requestForNode);
-          workspaceCode = overview.defaultWorkspaceCode;
-        }
-        if (!workspaceCode) {
-          setCreateError({
-            nodeId: node.id,
-            message: t("这台电脑还没有可用的工作空间，无法创建会话。"),
-          });
-          return;
-        }
-        const targetWorkspaceCode = workspaceCode;
+        // The new session belongs to the workspace whose group was tapped, so
+        // the node files it exactly where the drawer will list it again.
+        const targetWorkspaceCode = workspace.workspaceCode;
+        // Topic/directory groups keep their context, so the session lands in
+        // that group instead of appearing as an unattached 随聊 session.
         const session = await requestForNode(node, ({ tunnel }) =>
-          createChatSession({ tunnel, workspaceCode: targetWorkspaceCode }),
+          createChatSession({
+            tunnel,
+            workspaceCode: targetWorkspaceCode,
+            ...(context.projectCode ? { projectCode: context.projectCode } : {}),
+            ...(context.directoryCode
+              ? { directoryCode: context.directoryCode }
+              : {}),
+          }),
         );
         onOpenSession(
           node,
           session,
           session.workspaceCode ?? targetWorkspaceCode,
+          workspace.label,
         );
       } catch (error) {
         setCreateError({ nodeId: node.id, message: describeError(error) });
       } finally {
         creatingRef.current = false;
-        setCreatingNodeId(null);
+        setCreatingKey(null);
       }
     },
-    [nodeStates, onOpenSession, requestForNode, t],
+    [onOpenSession, requestForNode],
   );
 
   useEffect(() => {
@@ -479,6 +485,12 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
                         node,
                         item.session,
                         item.workspaceCode,
+                        state?.status === "ready"
+                          ? (state.workspaces.find(
+                              (workspace) =>
+                                workspace.workspaceCode === item.workspaceCode,
+                            )?.label ?? null)
+                          : null,
                       )
                     }
                     style={({ pressed }) => [
@@ -507,47 +519,83 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
                 ) => {
                   const subgroupId = `${node.id}:${workspace.workspaceCode}:${group.key}:${subgroup.key}`;
                   const open = expandedGroups[subgroupId] === true;
+                  const createKey = `${subgroupId}`;
+                  const creating = creatingKey === createKey;
                   return (
                     <View key={subgroup.key}>
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityState={{ expanded: open }}
-                        accessibilityLabel={format(
-                          open
-                            ? "收起分组 {name}"
-                            : "展开分组 {name}",
-                          { name: subgroup.label },
-                        )}
-                        onPress={() => toggleGroup(subgroupId)}
-                        style={({ pressed }) => [
-                          styles.subgroupRow,
-                          pressed && styles.pressed,
-                        ]}
-                      >
-                        <Ionicons
-                          name={
-                            group.pageCode === "chat.directories"
-                              ? "folder-outline"
-                              : "albums-outline"
-                          }
-                          size={12}
-                          color={palette.muted}
-                        />
-                        <Text
-                          style={styles.subgroupLabel}
-                          numberOfLines={1}
+                      <View style={styles.subgroupHeader}>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityState={{ expanded: open }}
+                          accessibilityLabel={format(
+                            open
+                              ? "收起分组 {name}"
+                              : "展开分组 {name}",
+                            { name: subgroup.label },
+                          )}
+                          onPress={() => toggleGroup(subgroupId)}
+                          style={({ pressed }) => [
+                            styles.subgroupRow,
+                            pressed && styles.pressed,
+                          ]}
                         >
-                          {subgroup.label}
-                        </Text>
-                        <Text style={styles.groupCount}>
-                          {subgroup.sessions.length}
-                        </Text>
-                        <Ionicons
-                          name={open ? "chevron-down" : "chevron-forward"}
-                          size={11}
-                          color={palette.muted}
-                        />
-                      </Pressable>
+                          <Ionicons
+                            name={
+                              group.pageCode === "chat.directories"
+                                ? "folder-outline"
+                                : "albums-outline"
+                            }
+                            size={12}
+                            color={palette.muted}
+                          />
+                          <Text
+                            style={styles.subgroupLabel}
+                            numberOfLines={1}
+                          >
+                            {subgroup.label}
+                          </Text>
+                          <Text style={styles.groupCount}>
+                            {subgroup.sessions.length}
+                          </Text>
+                          <Ionicons
+                            name={open ? "chevron-down" : "chevron-forward"}
+                            size={11}
+                            color={palette.muted}
+                          />
+                        </Pressable>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={format(
+                            "在 {name} 新建会话",
+                            { name: subgroup.label },
+                          )}
+                          accessibilityState={{
+                            busy: creating,
+                            disabled: creatingKey !== null,
+                          }}
+                          disabled={creatingKey !== null}
+                          hitSlop={8}
+                          onPress={() =>
+                            void createSession(node, workspace, createKey, {
+                              projectCode: subgroup.projectCode,
+                              directoryCode: subgroup.directoryCode,
+                            })
+                          }
+                          style={({ pressed }) => [
+                            styles.groupCreate,
+                            creatingKey !== null &&
+                              !creating &&
+                              styles.groupCreateDisabled,
+                            pressed && styles.pressed,
+                          ]}
+                        >
+                          {creating ? (
+                            <ActivityIndicator size="small" color={palette.accent} />
+                          ) : (
+                            <Ionicons name="add" size={14} color={palette.muted} />
+                          )}
+                        </Pressable>
+                      </View>
                       {open ? (
                         <View style={styles.sessionList}>
                           {subgroup.sessions.map(renderSession)}
@@ -577,44 +625,76 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
                       (total, subgroup) => total + subgroup.sessions.length,
                       0,
                     );
+                  const createKey = `${node.id}:${workspace.workspaceCode}:${group.key}`;
+                  const creating = creatingKey === createKey;
+                  const createDisabled = creatingKey !== null || group.unsupported;
                   return (
                     <View key={group.key}>
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityState={{ expanded: open }}
-                        accessibilityLabel={format(
-                          open
-                            ? "收起分组 {name}"
-                            : "展开分组 {name}",
-                          { name: group.label },
+                      <View style={styles.groupHeader}>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityState={{ expanded: open }}
+                          accessibilityLabel={format(
+                            open
+                              ? "收起分组 {name}"
+                              : "展开分组 {name}",
+                            { name: group.label },
+                          )}
+                          onPress={() => toggleMenuGroup(menuId)}
+                          style={({ pressed }) => [
+                            styles.groupRow,
+                            pressed && styles.pressed,
+                          ]}
+                        >
+                          <Ionicons
+                            name={
+                              group.pageCode === "chat.projects"
+                                ? "albums-outline"
+                                : group.pageCode === "chat.directories"
+                                  ? "folder-outline"
+                                  : group.pageCode === "chat.recents"
+                                    ? "chatbubbles-outline"
+                                    : "apps-outline"
+                            }
+                            size={14}
+                            color={palette.muted}
+                          />
+                          <Text style={styles.groupLabel}>{group.label}</Text>
+                          <Text style={styles.groupCount}>{count}</Text>
+                          <Ionicons
+                            name={open ? "chevron-down" : "chevron-forward"}
+                            size={12}
+                            color={palette.muted}
+                          />
+                        </Pressable>
+                        {group.unsupported ? null : (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={format(
+                              "在 {workspace} 的 {group} 新建会话",
+                              { workspace: workspace.label, group: group.label },
+                            )}
+                            accessibilityState={{
+                              busy: creating,
+                              disabled: createDisabled,
+                            }}
+                            disabled={createDisabled}
+                            hitSlop={6}
+                            onPress={() => void createSession(node, workspace, group.key)}
+                            style={({ pressed }) => [
+                              styles.groupCreate,
+                              createDisabled && !creating && styles.groupCreateDisabled,
+                              pressed && styles.pressed,
+                            ]}
+                          >
+                            {creating ? (
+                              <ActivityIndicator size="small" color={palette.accent} />
+                            ) : (
+                              <Ionicons name="add" size={14} color={palette.muted} />
+                            )}
+                          </Pressable>
                         )}
-                        onPress={() => toggleMenuGroup(menuId)}
-                        style={({ pressed }) => [
-                          styles.groupRow,
-                          pressed && styles.pressed,
-                        ]}
-                      >
-                        <Ionicons
-                          name={
-                            group.pageCode === "chat.projects"
-                              ? "albums-outline"
-                              : group.pageCode === "chat.directories"
-                                ? "folder-outline"
-                                : group.pageCode === "chat.recents"
-                                  ? "chatbubbles-outline"
-                                  : "apps-outline"
-                          }
-                          size={14}
-                          color={palette.muted}
-                        />
-                        <Text style={styles.groupLabel}>{group.label}</Text>
-                        <Text style={styles.groupCount}>{count}</Text>
-                        <Ionicons
-                          name={open ? "chevron-down" : "chevron-forward"}
-                          size={12}
-                          color={palette.muted}
-                        />
-                      </Pressable>
+                      </View>
                       {open ? (
                         <View style={styles.menuBody}>
                           {group.unsupported ? (
@@ -653,8 +733,21 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
                     0,
                   );
 
+                  // Products without navigation menus list their sessions
+                  // flat, so the workspace row itself carries the create action.
+                  const flatGroup =
+                    workspace.groups.length === 1 &&
+                    workspace.groups[0]?.pageCode === "sessions"
+                      ? workspace.groups[0]
+                      : null;
+                  const flatKey = flatGroup
+                    ? `${node.id}:${workspace.workspaceCode}:${flatGroup.key}`
+                    : null;
+                  const flatCreating = flatKey !== null && creatingKey === flatKey;
+
                   return (
                     <View key={workspace.workspaceCode}>
+                      <View style={styles.groupHeader}>
                       <Pressable
                         accessibilityRole="button"
                         accessibilityState={{ expanded: workspaceOpen }}
@@ -692,6 +785,38 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
                           color={palette.muted}
                         />
                       </Pressable>
+                      {flatGroup ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={format(
+                            "在 {workspace} 新建会话",
+                            { workspace: workspace.label },
+                          )}
+                          accessibilityState={{
+                            busy: flatCreating,
+                            disabled: creatingKey !== null,
+                          }}
+                          disabled={creatingKey !== null}
+                          hitSlop={6}
+                          onPress={() =>
+                            void createSession(node, workspace, flatGroup.key)
+                          }
+                          style={({ pressed }) => [
+                            styles.groupCreate,
+                            creatingKey !== null &&
+                              !flatCreating &&
+                              styles.groupCreateDisabled,
+                            pressed && styles.pressed,
+                          ]}
+                        >
+                          {flatCreating ? (
+                            <ActivityIndicator size="small" color={palette.muted} />
+                          ) : (
+                            <Ionicons name="add" size={14} color={palette.muted} />
+                          )}
+                        </Pressable>
+                      ) : null}
+                      </View>
 
                       {workspaceOpen ? (
                         <View style={styles.workspaceBody}>
@@ -750,39 +875,6 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
                           />
                         )}
                       </Pressable>
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel={format("在 {name} 上新建会话", {
-                          name: node.name,
-                        })}
-                        accessibilityState={{
-                          busy: creatingNodeId === node.id,
-                          disabled: creatingNodeId !== null,
-                        }}
-                        disabled={creatingNodeId !== null}
-                        hitSlop={6}
-                        onPress={() => void createSession(node)}
-                        style={({ pressed }) => [
-                          styles.nodeCreate,
-                          creatingNodeId !== null &&
-                            creatingNodeId !== node.id &&
-                            styles.nodeCreateDisabled,
-                          pressed && styles.pressed,
-                        ]}
-                      >
-                        {creatingNodeId === node.id ? (
-                          <ActivityIndicator
-                            size="small"
-                            color={palette.accent}
-                          />
-                        ) : (
-                          <Ionicons
-                            name="add"
-                            size={16}
-                            color={palette.accent}
-                          />
-                        )}
-                      </Pressable>
                     </View>
 
                     {createFailure &&
@@ -792,14 +884,6 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
                         <Text style={styles.errorText} numberOfLines={3}>
                           {createFailure}
                         </Text>
-                        <Pressable
-                          accessibilityRole="button"
-                          accessibilityLabel={t("重试")}
-                          onPress={() => void createSession(node)}
-                          hitSlop={6}
-                        >
-                          <Text style={styles.retryText}>{t("重试")}</Text>
-                        </Pressable>
                       </View>
                     ) : null}
 
@@ -893,17 +977,26 @@ const createStyles = (c: Palette) =>
       minHeight: 40,
       minWidth: 0,
     },
-    nodeCreate: {
-      width: 26,
-      height: 26,
-      borderRadius: 13,
+    groupHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 2,
+    },
+    subgroupHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 2,
+    },
+    // Same affordance as the desktop section header: a bare 24px icon that
+    // only tints on press, no filled circle.
+    groupCreate: {
+      width: 24,
+      height: 24,
+      borderRadius: 6,
       alignItems: "center",
       justifyContent: "center",
-      backgroundColor: c.accentSoft,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: c.accentBorder,
     },
-    nodeCreateDisabled: {
+    groupCreateDisabled: {
       opacity: 0.4,
     },
     createErrorRow: {
@@ -982,18 +1075,21 @@ const createStyles = (c: Palette) =>
       fontWeight: "600",
     },
     groupRow: {
+      flex: 1,
       flexDirection: "row",
       alignItems: "center",
       gap: spacing.sm,
       minHeight: 34,
       paddingHorizontal: spacing.sm,
       borderRadius: 8,
+      minWidth: 0,
     },
     menuBody: {
       paddingLeft: spacing.md,
       gap: 1,
     },
     subgroupRow: {
+      flex: 1,
       flexDirection: "row",
       alignItems: "center",
       gap: spacing.sm,

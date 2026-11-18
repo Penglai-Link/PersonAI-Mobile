@@ -14,6 +14,8 @@ import { Ionicons } from "./icons";
 
 interface AppHeaderProps {
   title: string;
+  /** Inline tag after the title, such as the workspace a session belongs to. */
+  titleAccessory?: ReactNode;
   subtitle?: string;
   /** Inline detail after the subtitle, such as a latency reading. */
   subtitleAccessory?: ReactNode;
@@ -25,6 +27,7 @@ interface AppHeaderProps {
 
 export function AppHeader({
   title,
+  titleAccessory,
   subtitle,
   subtitleAccessory,
   onBack,
@@ -50,12 +53,15 @@ export function AppHeader({
       ) : null}
 
       <View style={styles.titles}>
-        <Text
-          style={[styles.title, large && styles.largeTitle]}
-          numberOfLines={1}
-        >
-          {title}
-        </Text>
+        <View style={styles.titleRow}>
+          <Text
+            style={[styles.title, large && styles.largeTitle]}
+            numberOfLines={1}
+          >
+            {title}
+          </Text>
+          {titleAccessory}
+        </View>
         {subtitle || subtitleAccessory ? (
           <View style={styles.subtitleRow}>
             {subtitle ? (
@@ -100,12 +106,22 @@ const createStyles = (c: Palette) =>
       flex: 1,
       gap: 2,
     },
+    titleRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.sm,
+      minWidth: 0,
+    },
     title: {
+      flexShrink: 1,
       color: c.text,
       ...typography.title,
     },
     largeTitle: {
       ...typography.display,
+    },
+    titleTag: {
+      flexShrink: 0,
     },
     subtitleRow: {
       flexDirection: "row",

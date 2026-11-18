@@ -19,19 +19,27 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import {
   ASSISTANT_SOURCE_TYPE,
+  defaultModelOption,
   listAssistants,
   listChatMessages,
   answerChatUserInput,
   getChatA2uiState,
   listChatProtocolEvents,
   listChatUserInputRequests,
+  listDirectories,
+  listModelSelectOptions,
+  listWorkspaceOptions,
   runChatA2uiAction,
   sendChatMessageStream,
+  setChatWorkingDirectory,
   steerChatMessage,
   stopChatRun,
   uploadChatAttachment,
   type ChatAttachment,
   type ChatMessage,
+  type DirectoryRecord,
+  type ModelSelectOption,
+  type ReasoningEffort,
 } from "../api/tron";
 import type { AgUiEvent } from "../api/rpc";
 import { AppHeader } from "../components/AppHeader";
@@ -40,7 +48,16 @@ import { EmptyState } from "../components/EmptyState";
 import { InlineBanner } from "../components/InlineBanner";
 import { LoadingView } from "../components/LoadingView";
 import { MessageBubble as LocalMessageBubble } from "../components/MessageBubble";
+import {
+  ModelEffortSelector,
+  type ModelEffortSelectorLabels,
+} from "../components/ModelEffortSelector";
+import {
+  WorkspaceSelector,
+  type WorkspaceSelectorLabels,
+} from "../components/WorkspaceSelector";
 import { NodeLatencyText } from "../components/NodeLatency";
+import { RunNotice, type RunNoticeLabels } from "../components/RunNotice";
 import { RunProcess } from "../components/RunProcess";
 import {
   ApprovalCard,
@@ -52,16 +69,19 @@ import {
 import {
   ChatA2uiSession,
   batchApprovalDecisions,
+  buildAguiRunNotices,
   interactionMessages,
   nativeUserInputBatchAnswer,
   nativeUserInputRequests,
   pendingApprovalRequests,
+  type AguiRunNotice,
   type ChatA2uiActionHandler,
   type ChatA2uiState,
   type ChatMessage as AgentChatMessage,
   type ChatUserInputAnswer,
   type ChatUserInputLabels,
   type ChatUserInputRequest,
+  type TranscriptAguiEvent,
 } from "@personai/agent-ui-chat-core/headless";
 import { Screen } from "../components/Screen";
 import { Ionicons } from "../components/icons";
@@ -92,15 +112,29 @@ interface QueuedChatMessage {
   content: string;
 }
 
+/** One run's lifecycle notices, derived from its AG-UI events. */
+interface RunNotices {
+  runId: string;
+  notices: AguiRunNotice[];
+}
+
 /**
- * A turn the node started and then failed (`RUN_ERROR`). It is kept next to the
- * transcript instead of only in the error banner so the process view and the
- * retry stay attached to the message that failed.
+ * Per-session model choice, kept in memory only: chat preferences are session
+ * content and never go to AsyncStorage. Matching the desktop composer, the
+ * node's auto route is the fallback.
  */
-interface RunFailure {
-  trace: RunTrace;
-  content: string;
-  attachments: ChatAttachment[];
+/** Workspace display names per node, memory-only. */
+const workspaceLabels = new Map<string, string>();
+
+const sessionModelChoices = new Map<
+  string,
+  { optionCode: string; effort: ReasoningEffort | null }
+>();
+
+function eventRunId(event: AgUiEvent): string | null {
+  return typeof event.runId === "string" && event.runId.trim()
+    ? event.runId
+    : null;
 }
 
 function toAgentMessage(
@@ -310,12 +344,34 @@ export function ChatScreen({ navigation, route }: Props) {
     () => new Map(),
   );
   const [liveTrace, setLiveTrace] = useState<RunTrace | null>(null);
-  const [runFailure, setRunFailure] = useState<RunFailure | null>(null);
+  /** Notices of the run being sent; cleared when the next turn starts. */
+  const [liveRunNotices, setLiveRunNotices] = useState<RunNotices | null>(null);
+  /** Per-run notices rebuilt from the node's protocol replay, in run order. */
+  const [replayRunNotices, setReplayRunNotices] = useState<RunNotices[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [queued, setQueued] = useState<QueuedChatMessage[]>([]);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const [attachmentPreviews, setAttachmentPreviews] = useState<Record<string, string>>({});
   const [attachmentUploading, setAttachmentUploading] = useState(false);
+  const [workspaceLabel, setWorkspaceLabel] = useState<string | null>(
+    route.params.workspaceLabel ?? null,
+  );
+  const [workingDirectoryCode, setWorkingDirectoryCode] = useState<
+    string | null
+  >(session.workingDirectoryCode ?? session.directoryCode ?? null);
+  const [workspaceDirectories, setWorkspaceDirectories] = useState<
+    DirectoryRecord[]
+  >([]);
+  const [directoriesLoading, setDirectoriesLoading] = useState(false);
+  const [directoriesFailed, setDirectoriesFailed] = useState(false);
+  const [modelOptions, setModelOptions] = useState<ModelSelectOption[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelOptionCode, setModelOptionCode] = useState<string>(
+    () => sessionModelChoices.get(sessionCode)?.optionCode ?? "",
+  );
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | null>(
+    () => sessionModelChoices.get(sessionCode)?.effort ?? null,
+  );
   const [pendingRequests, setPendingRequests] = useState<ChatUserInputRequest[]>([]);
   const [answeredRequests, setAnsweredRequests] = useState<ChatUserInputRequest[]>([]);
   const [answering, setAnswering] = useState(false);
@@ -329,6 +385,8 @@ export function ChatScreen({ navigation, route }: Props) {
   const sendingRef = useRef(false);
   const sessionStatusRef = useRef(sessionStatus);
   const liveTraceRef = useRef<RunTrace | null>(null);
+  /** AG-UI events of the current send, the input of `buildAguiRunNotices`. */
+  const runEventsRef = useRef<AgUiEvent[]>([]);
   /** What the message list was last reset for; status flips must not reset it. */
   const resetKeyRef = useRef<string>("");
   /** Guards the one reload per online transition. */
@@ -344,6 +402,122 @@ export function ChatScreen({ navigation, route }: Props) {
   const runMessageRef = useRef<
     (content: string, attachments?: ChatAttachment[]) => Promise<void>
   >(async () => undefined);
+
+  const noticesByRun = useMemo(() => {
+    const map = new Map<string, AguiRunNotice[]>();
+    for (const entry of replayRunNotices) {
+      if (entry.notices.length) map.set(entry.runId, entry.notices);
+    }
+    return map;
+  }, [replayRunNotices]);
+  /** Keeps the transcript pinned to the newest turn when it carries a notice. */
+  const hasRunNotices =
+    Boolean(liveRunNotices) ||
+    replayRunNotices.some((entry) => entry.notices.length > 0);
+
+  // A session opened from the dashboard carries no label; read it once per node
+  // so the header always names the workspace the session lives in.
+  useEffect(() => {
+    if (workspaceLabel || !workspaceCode || sessionStatus !== "online") return;
+    const key = `${currentNode?.id ?? ""}|${workspaceCode}`;
+    const cached = workspaceLabels.get(key);
+    if (cached) {
+      setWorkspaceLabel(cached);
+      return;
+    }
+    let cancelled = false;
+    void sessionRequest(
+      ({ tunnel }) => listWorkspaceOptions({ tunnel }),
+      { retry: false },
+    )
+      .then((options) => {
+        if (cancelled || !mountedRef.current) return;
+        const match = options.find(
+          (option) => option.workspaceCode === workspaceCode,
+        );
+        const label =
+          match?.label?.trim() || match?.name?.trim() || null;
+        if (label) {
+          workspaceLabels.set(key, label);
+          setWorkspaceLabel(label);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    currentNode?.id,
+    sessionRequest,
+    sessionStatus,
+    workspaceCode,
+    workspaceLabel,
+  ]);
+
+  const selectedModelOption = useMemo(
+    () =>
+      modelOptions.find((option) => option.optionCode === modelOptionCode) ??
+      defaultModelOption(modelOptions),
+    [modelOptionCode, modelOptions],
+  );
+
+  useEffect(() => {
+    if (sessionStatus !== "online") return;
+    let cancelled = false;
+    setModelsLoading(true);
+    void sessionRequest(
+      ({ tunnel }) =>
+        listModelSelectOptions({
+          tunnel,
+          workspaceCode,
+          assistantCode: effectiveAssistantCode,
+        }),
+      { retry: false },
+    )
+      .then((options) => {
+        if (cancelled || !mountedRef.current) return;
+        setModelOptions(options);
+        // Keep the remembered choice when the node still offers it; otherwise
+        // fall back to the node's auto route, which is the desktop default.
+        setModelOptionCode((current) =>
+          options.some((option) => option.optionCode === current)
+            ? current
+            : (defaultModelOption(options)?.optionCode ?? ""),
+        );
+      })
+      .catch(() => {
+        // Older nodes do not expose the catalog; sending keeps its old shape.
+        if (!cancelled && mountedRef.current) setModelOptions([]);
+      })
+      .finally(() => {
+        if (!cancelled && mountedRef.current) setModelsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    effectiveAssistantCode,
+    sessionRequest,
+    sessionStatus,
+    workspaceCode,
+  ]);
+
+  // The effort belongs to the model: picking another model resets it to 自动.
+  useEffect(() => {
+    setReasoningEffort(sessionModelChoices.get(sessionCode)?.effort ?? null);
+  }, [sessionCode]);
+
+  useEffect(() => {
+    sessionModelChoices.set(sessionCode, {
+      optionCode: modelOptionCode,
+      effort: reasoningEffort,
+    });
+  }, [modelOptionCode, reasoningEffort, sessionCode]);
+
+  const handleSelectModel = useCallback((option: ModelSelectOption) => {
+    setModelOptionCode(option.optionCode);
+    setReasoningEffort(null);
+  }, []);
 
   useEffect(() => {
     const givenName = route.params.assistantName?.trim();
@@ -442,6 +616,29 @@ export function ChatScreen({ navigation, route }: Props) {
               }
               return next;
             });
+            // Group the replay per run so the work rail can show the same
+            // lifecycle notices the web clients derive from these events.
+            const runOrder: string[] = [];
+            const eventsByRun = new Map<string, AgUiEvent[]>();
+            for (const event of events) {
+              const runId = eventRunId(event);
+              if (!runId) continue;
+              const bucket = eventsByRun.get(runId);
+              if (bucket) {
+                bucket.push(event);
+              } else {
+                eventsByRun.set(runId, [event]);
+                runOrder.push(runId);
+              }
+            }
+            setReplayRunNotices(
+              runOrder.map((runId) => ({
+                runId,
+                notices: buildAguiRunNotices(
+                  (eventsByRun.get(runId) ?? []) as unknown as TranscriptAguiEvent[],
+                ),
+              })),
+            );
             const requests = nativeUserInputRequests(
               events as Parameters<typeof nativeUserInputRequests>[0],
               sessionCode,
@@ -737,7 +934,9 @@ export function ChatScreen({ navigation, route }: Props) {
     setTraces(new Map());
     setLiveTrace(null);
     liveTraceRef.current = null;
-    setRunFailure(null);
+    runEventsRef.current = [];
+    setLiveRunNotices(null);
+    setReplayRunNotices([]);
     setActiveRunId(null);
     queuedRef.current = [];
     setQueued([]);
@@ -748,9 +947,26 @@ export function ChatScreen({ navigation, route }: Props) {
     setAnswering(false);
     answeredRequestIdsRef.current = new Set();
     a2uiBusyRef.current = false;
+    // Model choice belongs to the session that recorded it.
+    const remembered = sessionModelChoices.get(sessionCode);
+    setModelOptionCode(remembered?.optionCode ?? "");
+    setReasoningEffort(remembered?.effort ?? null);
+    setWorkspaceLabel(route.params.workspaceLabel ?? null);
+    setWorkingDirectoryCode(
+      route.params.session.workingDirectoryCode ??
+        route.params.session.directoryCode ??
+        null,
+    );
+    setWorkspaceDirectories([]);
+    setDirectoriesFailed(false);
     setA2uiRevision((value) => value + 1);
     setLoading(sessionStatus !== "offline");
-  }, [contentEpoch, sessionCode, sessionStatus]);
+  }, [
+    contentEpoch,
+    route.params.workspaceLabel,
+    sessionCode,
+    sessionStatus,
+  ]);
 
   useEffect(() => {
     a2uiSessionRef.current = a2uiSession;
@@ -810,12 +1026,12 @@ export function ChatScreen({ navigation, route }: Props) {
   // content-size callback, which used to leave the transcript parked above the
   // newest turn. One short deferred scroll settles it on the real bottom.
   useEffect(() => {
-    if (!messages.length && !sending && !pendingRequests.length && !runFailure) {
+    if (!messages.length && !sending && !pendingRequests.length && !hasRunNotices) {
       return;
     }
     const timer = setTimeout(() => scrollToBottom(false), 120);
     return () => clearTimeout(timer);
-  }, [messages, pendingRequests.length, runFailure, scrollToBottom, sending]);
+  }, [hasRunNotices, messages, pendingRequests.length, scrollToBottom, sending]);
 
   useEffect(() => {
     const subscription = Keyboard.addListener(
@@ -840,10 +1056,11 @@ export function ChatScreen({ navigation, route }: Props) {
       setSending(true);
       setError(null);
       setNotice(null);
-      setRunFailure(null);
       setStreamText("");
       setLiveTrace(null);
       liveTraceRef.current = null;
+      runEventsRef.current = [];
+      setLiveRunNotices(null);
       setActiveRunId(null);
 
       const optimisticId = `local-${Date.now()}`;
@@ -878,6 +1095,10 @@ export function ChatScreen({ navigation, route }: Props) {
               content,
               attachments,
               assistantCode: effectiveAssistantCode,
+              // The node only runs its auto-model router when the request
+              // carries an explicit selection; the desktop sends the same one.
+              modelSelection: selectedModelOption?.modelSelection ?? null,
+              reasoningEffort,
               signal: controller.signal,
               onDelta: (delta) => {
                 accumulated += delta;
@@ -886,6 +1107,16 @@ export function ChatScreen({ navigation, route }: Props) {
               onEvent: (event) => {
                 if (!mountedRef.current) return;
                 const type = (event.type ?? "").toUpperCase();
+                // Only lifecycle/custom events feed the notice builder; text
+                // and tool deltas would just grow the buffer for a long run.
+                if (
+                  type === "RUN_STARTED" ||
+                  type === "RUN_FINISHED" ||
+                  type === "RUN_ERROR" ||
+                  type === "CUSTOM"
+                ) {
+                  runEventsRef.current.push(event);
+                }
                 if (type === "RUN_STARTED") {
                   setActiveRunId(
                     typeof event.runId === "string" ? event.runId : null,
@@ -905,6 +1136,22 @@ export function ChatScreen({ navigation, route }: Props) {
                 } else if (type === "RUN_ERROR") {
                   setActiveRunId(null);
                   setPendingRequests([]);
+                }
+                // Same notice vocabulary as the web chat rail: a failed or
+                // stopped run is reported from its AG-UI events, not invented
+                // per client. Recompute on the run's terminal event.
+                if (type === "RUN_ERROR" || type === "RUN_FINISHED") {
+                  const runId =
+                    eventRunId(event) ?? liveTraceRef.current?.runId ?? null;
+                  const notices = runId
+                    ? buildAguiRunNotices(
+                        runEventsRef.current as unknown as TranscriptAguiEvent[],
+                      )
+                    : [];
+                  if (runId && notices.length) {
+                    const next = { runId, notices };
+                    setLiveRunNotices(next);
+                  }
                 }
                 const nextTrace = reduceRunTrace(
                   liveTraceRef.current,
@@ -993,14 +1240,9 @@ export function ChatScreen({ navigation, route }: Props) {
         // run just produced is not narrowed away.
         const failedTrace = liveTraceRef.current as RunTrace | null;
         if (failedTrace && failedTrace.status === "failed") {
-          // The node answered `RUN_ERROR`: the turn itself failed. Keep the
-          // process and its reason attached to the transcript (with a retry)
-          // instead of a banner that the follow-up reload used to clear.
-          setRunFailure({
-            trace: failedTrace,
-            content,
-            attachments,
-          });
+          // The node answered `RUN_ERROR`: the run notice built in `onEvent`
+          // carries the failure, so keep the process view instead of adding a
+          // second, generic banner the follow-up reload would clear.
           setTraces((previous) =>
             new Map(previous).set(failedTrace.runId, failedTrace),
           );
@@ -1035,9 +1277,11 @@ export function ChatScreen({ navigation, route }: Props) {
     },
     [
       effectiveAssistantCode,
+      reasoningEffort,
       refreshA2uiState,
       reloadMessages,
       reportRequestError,
+      selectedModelOption,
       sessionCode,
       sessionRequest,
       sessionStatus,
@@ -1049,14 +1293,6 @@ export function ChatScreen({ navigation, route }: Props) {
   useEffect(() => {
     runMessageRef.current = runMessage;
   }, [runMessage]);
-
-  /** Resends the turn whose run failed, keeping its attachments. */
-  const retryRunFailure = useCallback(() => {
-    const failure = runFailure;
-    if (!failure || sendingRef.current) return;
-    setRunFailure(null);
-    void runMessage(failure.content, failure.attachments);
-  }, [runFailure, runMessage]);
 
   const handleSend = useCallback(() => {
     const content = input.trim();
@@ -1164,6 +1400,7 @@ export function ChatScreen({ navigation, route }: Props) {
           stopChatRun({
             tunnel,
             sessionCode,
+            workspaceCode,
             runId: activeRunId,
             assistantCode: effectiveAssistantCode,
           }),
@@ -1173,7 +1410,14 @@ export function ChatScreen({ navigation, route }: Props) {
     } catch (stopError) {
       if (mountedRef.current) setError(describeError(stopError));
     }
-  }, [activeRunId, effectiveAssistantCode, sessionCode, sessionRequest, t]);
+  }, [
+    activeRunId,
+    effectiveAssistantCode,
+    sessionCode,
+    sessionRequest,
+    t,
+    workspaceCode,
+  ]);
 
   const applyInteractionEvents = useCallback(
     (events: AgUiEvent[]) => {
@@ -1376,6 +1620,152 @@ export function ChatScreen({ navigation, route }: Props) {
     [format, t],
   );
 
+  const loadWorkspaceDirectories = useCallback(async () => {
+    if (!workspaceCode || sessionStatus !== "online") return;
+    setDirectoriesLoading(true);
+    setDirectoriesFailed(false);
+    try {
+      const directories = await sessionRequest(
+        ({ tunnel }) =>
+          listDirectories({ tunnel, workspaceCode, assistantCode: effectiveAssistantCode }),
+        { retry: false },
+      );
+      if (mountedRef.current) setWorkspaceDirectories(directories);
+    } catch {
+      if (mountedRef.current) setDirectoriesFailed(true);
+    } finally {
+      if (mountedRef.current) setDirectoriesLoading(false);
+    }
+  }, [
+    effectiveAssistantCode,
+    sessionRequest,
+    sessionStatus,
+    workspaceCode,
+  ]);
+
+  useEffect(() => {
+    void loadWorkspaceDirectories();
+  }, [loadWorkspaceDirectories]);
+
+  const handleWorkingDirectoryChange = useCallback(
+    async (directoryCode: string | null) => {
+      try {
+        const updated = await sessionRequest(
+          ({ tunnel }) =>
+            setChatWorkingDirectory({
+              tunnel,
+              sessionCode,
+              workspaceCode,
+              assistantCode: effectiveAssistantCode,
+              directoryCode,
+            }),
+          { retry: false },
+        );
+        if (!mountedRef.current) return;
+        setWorkingDirectoryCode(
+          updated?.workingDirectoryCode ??
+            updated?.directoryCode ??
+            directoryCode,
+        );
+        setError(null);
+      } catch (changeError) {
+        if (mountedRef.current) setError(describeError(changeError));
+      }
+    },
+    [
+      effectiveAssistantCode,
+      sessionCode,
+      sessionRequest,
+      workspaceCode,
+    ],
+  );
+
+  const workspaceSelectorLabels = useMemo<WorkspaceSelectorLabels>(
+    () => ({
+      ariaLabel: t("选择工作区"),
+      noDirectory: t("不指定工作区"),
+      workspaceFallback: t("工作空间"),
+      loading: t("正在读取工作区…"),
+      loadFailed: t("工作区读取失败"),
+      retry: t("重试"),
+      unavailable: t("不可用"),
+      close: t("关闭"),
+      pickTitle: t("选择工作区"),
+      empty: t("这个工作空间还没有目录。"),
+      addHint: t("在电脑端设置里添加目录后，这里会显示可选的工作区。"),
+    }),
+    [t],
+  );
+
+  const modelSelectorLabels = useMemo<ModelEffortSelectorLabels>(
+    () => ({
+      triggerAria: (model, effort) =>
+        effort
+          ? format("选择模型：{model}，智力程度 {effort}", { model, effort })
+          : format("选择模型：{model}", { model }),
+      panelTitle: t("模型与智力程度"),
+      effortLabel: t("智力程度"),
+      automatic: t("自动"),
+      faster: t("更快"),
+      deeper: t("更深入"),
+      currentModel: t("当前模型"),
+      changeModel: t("更换模型"),
+      hideModels: t("收起模型"),
+      searchPlaceholder: t("搜索模型…"),
+      noMatch: (query) => format("没有匹配“{query}”的模型。", { query }),
+      autoName: t("对话自动路由"),
+      providerModels: t("供应商模型"),
+      qualityGroup: (quality, vendor) =>
+        format("{quality} · {vendor}", { quality, vendor }),
+      empty: t("没有可用模型"),
+      loading: t("加载模型中…"),
+      close: t("关闭"),
+      effortNames: {
+        None: t("关闭思考"),
+        Minimal: t("极低"),
+        Low: t("低"),
+        Medium: t("中"),
+        High: t("高"),
+        XHigh: t("超高"),
+        Max: t("最大"),
+        Ultra: "Ultra",
+      },
+      qualityNames: {
+        High: t("远程高质量"),
+        Middle: t("远程中质量"),
+        Low: t("远程低质量"),
+      },
+    }),
+    [format, t],
+  );
+
+  const runNoticeLabels = useMemo<RunNoticeLabels>(
+    () => ({
+      failed: t("运行失败"),
+      stopped: t("已停止"),
+      mcpUnavailable: t("MCP 集成不可用"),
+      presentationIncomplete: t("展示回放不完整"),
+      presentationIncompleteDetail: t(
+        "部分输出未能展示或保存，执行结果另行报告。",
+      ),
+      compactionRequested: t("准备压缩上下文…"),
+      compactionStarted: t("正在压缩上下文…"),
+      compactionCompleted: t("上下文已压缩"),
+      compactionFailed: t("上下文压缩失败"),
+      compactionInterrupted: t("运行结束时压缩尚未完成"),
+      toolSchemaOverBudget: t("工具定义超出上下文预算"),
+      toolSchemaBudget: (estimatedTokens, limitTokens, toolCount) =>
+        format("工具定义约占 {actual} tokens，超过 {limit} 的上限（{count} 个工具）。", {
+          actual: estimatedTokens.toLocaleString(),
+          limit: limitTokens.toLocaleString(),
+          count: toolCount.toLocaleString(),
+        }),
+      toolSchemaBudgetHint: t("减少暴露的工具，或提高工具 Schema 预算。"),
+      details: t("错误详情"),
+    }),
+    [format, t],
+  );
+
   const agentMessages = useMemo(
     () =>
       messages.map((message) =>
@@ -1420,6 +1810,24 @@ export function ChatScreen({ navigation, route }: Props) {
     return owners;
   }, [transcriptMessages]);
 
+  // The work rail of the newest turn. A failed run usually has no assistant
+  // message to own it (the node never persists one), so its notice belongs at
+  // the end of the transcript; once an assistant row owns the run, that row
+  // renders the notice instead.
+  const newestReplay = replayRunNotices.length
+    ? replayRunNotices[replayRunNotices.length - 1]
+    : null;
+  const pendingRunNotices =
+    liveRunNotices ??
+    (newestReplay && newestReplay.notices.length ? newestReplay : null);
+  const footerRunNotices =
+    pendingRunNotices && !traceOwnerByRun.has(pendingRunNotices.runId)
+      ? pendingRunNotices
+      : null;
+  const footerRunTrace = footerRunNotices
+    ? traces.get(footerRunNotices.runId) ?? null
+    : null;
+
   return (
     <Screen padded={false}>
       <View style={[styles.flex, { paddingBottom: keyboardOverlap }]}>
@@ -1428,6 +1836,16 @@ export function ChatScreen({ navigation, route }: Props) {
         >
           <AppHeader
             title={title}
+            titleAccessory={
+              workspaceLabel ? (
+                <View style={styles.workspaceTag}>
+                  <Ionicons name="layers-outline" size={10} color={palette.accent} />
+                  <Text style={styles.workspaceTagText} numberOfLines={1}>
+                    {workspaceLabel}
+                  </Text>
+                </View>
+              ) : null
+            }
             subtitle={
               assistantChat
                 ? nodeLabel
@@ -1526,7 +1944,13 @@ export function ChatScreen({ navigation, route }: Props) {
               <FlatList
                 ref={listRef}
                 data={transcriptMessages}
-                extraData={[traces, a2uiRevision, pendingRequests, answeredRequests]}
+                extraData={[
+                  traces,
+                  a2uiRevision,
+                  pendingRequests,
+                  answeredRequests,
+                  noticesByRun,
+                ]}
                 keyExtractor={(item) => item.messageId}
                 renderItem={({ item }) => {
                   const trace =
@@ -1537,7 +1961,15 @@ export function ChatScreen({ navigation, route }: Props) {
                       : undefined;
                   return (
                     <View>
-                      {trace ? <RunProcess trace={trace} /> : null}
+                      {trace ? (
+                        <RunProcess
+                          trace={trace}
+                          noticeLabels={runNoticeLabels}
+                          notices={
+                            item.runId ? noticesByRun.get(item.runId) : undefined
+                          }
+                        />
+                      ) : null}
                       {item.role === "USER" &&
                       item.runId &&
                       !item.interactionResponse ? (
@@ -1591,12 +2023,21 @@ export function ChatScreen({ navigation, route }: Props) {
                   )
                 }
                 ListFooterComponent={
-                  sending || pendingRequests.length || runFailure ? (
+                  sending || pendingRequests.length || footerRunNotices ? (
                     <View>
                       {sending ? (
                         <>
                           {liveTrace ? (
-                            <RunProcess trace={liveTrace} live />
+                            <RunProcess
+                              trace={liveTrace}
+                              live
+                              noticeLabels={runNoticeLabels}
+                              notices={
+                                liveRunNotices?.runId === liveTrace.runId
+                                  ? liveRunNotices.notices
+                                  : undefined
+                              }
+                            />
                           ) : null}
                           <LocalMessageBubble
                             role="ASSISTANT"
@@ -1616,16 +2057,19 @@ export function ChatScreen({ navigation, route }: Props) {
                           theme={agentTheme}
                         />
                       ))}
-                      {runFailure ? (
-                        <View style={styles.failureWrap}>
-                          <RunProcess trace={runFailure.trace} />
-                          <InlineBanner
-                            message={t("这次没有生成回复，可以重试")}
-                            tone="danger"
-                            actionLabel={t("重试")}
-                            onAction={retryRunFailure}
+                      {!sending && footerRunNotices ? (
+                        footerRunTrace ? (
+                          <RunProcess
+                            trace={footerRunTrace}
+                            noticeLabels={runNoticeLabels}
+                            notices={footerRunNotices.notices}
                           />
-                        </View>
+                        ) : (
+                          <RunNotice
+                            notices={footerRunNotices.notices}
+                            labels={runNoticeLabels}
+                          />
+                        )
                       ) : null}
                     </View>
                   ) : undefined
@@ -1635,7 +2079,7 @@ export function ChatScreen({ navigation, route }: Props) {
                     transcriptMessages.length ||
                     sending ||
                     pendingRequests.length ||
-                    runFailure
+                    footerRunNotices
                   ) {
                     requestAnimationFrame(() => scrollToBottom(false));
                   }
@@ -1649,6 +2093,40 @@ export function ChatScreen({ navigation, route }: Props) {
                 attachmentUploadPending={attachmentUploading}
                 attachLabel={t("添加附件")}
                 clipboard={clipboardAdapter}
+                composerHeader={
+                  <View style={styles.workspaceHeader}>
+                    <WorkspaceSelector
+                      currentDirectoryCode={workingDirectoryCode}
+                      directories={workspaceDirectories}
+                      disabled={
+                        loading ||
+                        sessionStatus !== "online" ||
+                        directoriesLoading
+                      }
+                      failed={directoriesFailed}
+                      fixedDirectoryCode={session.directoryCode ?? null}
+                      labels={workspaceSelectorLabels}
+                      loading={directoriesLoading}
+                      onChange={handleWorkingDirectoryChange}
+                      onRetry={() => void loadWorkspaceDirectories()}
+                      workspaceLabel={workspaceLabel}
+                    />
+                  </View>
+                }
+                footerAddon={
+                  <ModelEffortSelector
+                    disabled={
+                      loading || sessionStatus !== "online" || modelsLoading
+                    }
+                    effort={reasoningEffort}
+                    labels={modelSelectorLabels}
+                    loading={modelsLoading}
+                    onSelectEffort={setReasoningEffort}
+                    onSelectModel={handleSelectModel}
+                    options={modelOptions}
+                    selected={selectedModelOption}
+                  />
+                }
                 disabledInput={loading || sessionStatus !== "online"}
                 disabledInputReason={
                   sessionStatus === "online"
@@ -1777,10 +2255,33 @@ const createStyles = (c: Palette) =>
       flexGrow: 1,
       justifyContent: "center",
     },
-    failureWrap: {
-      gap: spacing.sm,
-      marginTop: spacing.sm,
-      marginBottom: spacing.md,
+    workspaceTag: {
+      flexShrink: 0,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 3,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 2,
+      borderRadius: radius.pill,
+      backgroundColor: c.accentSoft,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.accentBorder,
+      maxWidth: 120,
+    },
+    workspaceTagText: {
+      flexShrink: 1,
+      color: c.accent,
+      ...typography.caption,
+      fontSize: 10,
+      fontWeight: "600",
+    },
+    workspaceHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      flexWrap: "wrap",
+      gap: spacing.xs,
+      paddingHorizontal: 2,
+      paddingBottom: 2,
     },
     composerWrap: {
       borderTopWidth: StyleSheet.hairlineWidth,
