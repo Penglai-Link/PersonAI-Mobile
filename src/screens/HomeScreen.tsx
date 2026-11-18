@@ -586,7 +586,9 @@ export function HomeScreen({ navigation }: Props) {
     );
   }
 
+  const unauthorized = sessionStatus === "unauthorized";
   const offline = sessionStatus === "offline";
+  const disconnected = offline || unauthorized;
   const connecting = sessionStatus === "idle" || sessionStatus === "connecting";
   const loadFailed =
     sessionStatus === "online" &&
@@ -595,11 +597,13 @@ export function HomeScreen({ navigation }: Props) {
     assistants.length === 0 &&
     workspaces.length === 0;
 
-  const statusLabel = offline
-    ? t("离线")
-    : sessionStatus === "online"
-      ? t("在线")
-      : t("连接中");
+  const statusLabel = unauthorized
+    ? t("凭证失效")
+    : offline
+      ? t("离线")
+      : sessionStatus === "online"
+        ? t("在线")
+        : t("连接中");
 
   const renderAssistantSection = () => (
     <View style={styles.section}>
@@ -948,13 +952,13 @@ export function HomeScreen({ navigation }: Props) {
         right={
           <Badge
             withDot
-            tone={offline ? "danger" : sessionStatus === "online" ? "accent" : "muted"}
+            tone={disconnected ? "danger" : sessionStatus === "online" ? "accent" : "muted"}
             label={statusLabel}
           />
         }
       />
 
-      {offline ? (
+      {disconnected ? (
         <ScrollView
           contentContainerStyle={styles.centeredContent}
           refreshControl={
@@ -968,20 +972,36 @@ export function HomeScreen({ navigation }: Props) {
           }
         >
           <EmptyState
-            icon="cloud-offline-outline"
-            title={t("电脑离线")}
+            icon={unauthorized ? "key-outline" : "cloud-offline-outline"}
+            title={unauthorized ? t("凭证失效") : t("电脑离线")}
             message={
               sessionError ??
-              t(
-                "无法连接这台电脑，已清空当前会话内容。请确认电脑端 Tron 在运行，并检查网络与节点地址。",
-              )
+              (unauthorized
+                ? t(
+                    "电脑端已吊销或删除了这台设备的配对凭证。请删除节点后重新扫码配对。",
+                  )
+                : t(
+                    "无法连接这台电脑，已清空当前会话内容。请确认电脑端 Tron 在运行，并检查网络与节点地址。",
+                  ))
             }
             action={
-              <Button
-                label={t("重新连接")}
-                icon="refresh"
-                onPress={() => void probeNow()}
-              />
+              unauthorized ? (
+                <Button
+                  label={t("管理节点")}
+                  icon="settings-outline"
+                  onPress={() =>
+                    navigation.navigate("Nodes", {
+                      productCode: computer.productCode,
+                    })
+                  }
+                />
+              ) : (
+                <Button
+                  label={t("重新连接")}
+                  icon="refresh"
+                  onPress={() => void probeNow()}
+                />
+              )
             }
           />
         </ScrollView>

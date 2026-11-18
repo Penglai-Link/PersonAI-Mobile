@@ -532,7 +532,38 @@ export class SecureTunnel {
         void tunnel.handleIncoming(queued);
       }
 
-        await tunnel.authenticate(deviceKey, authTimeout, options);
+        try {
+          await tunnel.authenticate(deviceKey, authTimeout, options);
+        } catch (authError) {
+          if (
+            authError instanceof ApiError &&
+            (authError.code === "TUNNEL_CLOSED" ||
+              authError.code === "SOCKET_ERROR")
+          ) {
+            // The Noise handshake already proved the node is reachable and holds
+            // the pinned key, so a socket that dies before `ready` means the
+            // node refused the authentication (revoked/unpaired device or a
+            // stale pairing ticket), not that the computer went offline. The
+            // node currently closes silently, so the handshake phase is the
+            // only signal the client gets.
+            const pairing = Boolean(options.ticket?.trim());
+            throw new ApiError(
+              translate(
+                pairing
+                  ? "配对票据无效或已过期，请在电脑端刷新配对二维码后重新扫码配对。"
+                  : "设备凭证已失效（可能已在电脑端被吊销或删除）。请删除节点后重新扫码配对。",
+              ),
+              {
+                code: pairing
+                  ? "REMOTE_PAIRING_TICKET_INVALID"
+                  : "REMOTE_AUTH_REJECTED",
+                status: pairing ? 401 : 403,
+                data: authError,
+              },
+            );
+          }
+          throw authError;
+        }
         tunnel.startHeartbeat();
       return tunnel;
     } catch (error) {
@@ -1361,7 +1392,8 @@ export class SecureTunnelPool {
           (error.code === "REMOTE_PAIRING_TICKET_INVALID" ||
             error.code === "REMOTE_PAIRING_TICKET_EXPIRED" ||
             error.code === "REMOTE_DEVICE_UNKNOWN" ||
-            error.code === "REMOTE_DEVICE_REVOKED")
+            error.code === "REMOTE_DEVICE_REVOKED" ||
+            error.code === "REMOTE_AUTH_REJECTED")
         ) {
           throw error;
         }

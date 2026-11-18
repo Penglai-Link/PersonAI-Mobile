@@ -60,9 +60,9 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-// Preserve the original dark look for first-run users; "system" is available
-// from the settings screen.
-const DEFAULT_MODE: ThemeMode = "dark";
+// First install follows the device appearance; an explicit choice made in the
+// settings screen is persisted and wins afterwards.
+const DEFAULT_MODE: ThemeMode = "system";
 const DEFAULT_THEME_ID: MobileThemeId = "default";
 
 function isThemeMode(value: unknown): value is ThemeMode {

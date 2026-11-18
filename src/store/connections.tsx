@@ -111,7 +111,12 @@ interface ConnectionsContextValue {
   ) => void;
   refreshNodeStatuses: () => Promise<void>;
   probing: boolean;
-  markNodeOnline: (nodeId: string) => void;
+  /**
+   * Marks a node reachable. `touchLastConnected` is only true when a session
+   * was actually established; background heartbeats must not rewrite
+   * `lastConnectedAt` (it made the node card churn every 15s).
+   */
+  markNodeOnline: (nodeId: string, touchLastConnected?: boolean) => void;
   markNodeOffline: (nodeId: string) => void;
 }
 
@@ -316,17 +321,28 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
         }),
       );
       const outcomeById = new Map(outcomes.map((outcome) => [outcome.id, outcome]));
+      // Probe results are often identical to what is already stored. Keeping
+      // the previous objects avoids re-rendering every card (and rewriting
+      // AsyncStorage) on each automatic probe.
       setNodes((previous) => {
+        let changed = false;
         const next = previous.map((node) => {
           const outcome = outcomeById.get(node.id);
           if (!outcome) return node;
-          return {
-            ...node,
-            online: outcome.endpoint !== null,
-            baseUrl: outcome.endpoint?.baseUrl ?? node.baseUrl,
-            transport: outcome.endpoint?.transport ?? node.transport,
-          };
+          const online = outcome.endpoint !== null;
+          const baseUrl = outcome.endpoint?.baseUrl ?? node.baseUrl;
+          const transport = outcome.endpoint?.transport ?? node.transport;
+          if (
+            node.online === online &&
+            node.baseUrl === baseUrl &&
+            node.transport === transport
+          ) {
+            return node;
+          }
+          changed = true;
+          return { ...node, online, baseUrl, transport };
         });
+        if (!changed) return previous;
         nodesRef.current = next;
         return next;
       });
@@ -607,24 +623,38 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
     await probeNodes(nodesRef.current);
   }, [probeNodes]);
 
-  const markNodeOnline = useCallback((nodeId: string) => {
-    const now = new Date().toISOString();
-    setNodes((previous) => {
-      const next = previous.map((node) =>
-        node.id === nodeId
-          ? { ...node, online: true, lastConnectedAt: now }
-          : node,
-      );
-      nodesRef.current = next;
-      return next;
-    });
-  }, []);
+  const markNodeOnline = useCallback(
+    (nodeId: string, touchLastConnected = true) => {
+      const now = new Date().toISOString();
+      setNodes((previous) => {
+        let changed = false;
+        const next = previous.map((node) => {
+          if (node.id !== nodeId) return node;
+          if (node.online === true && !touchLastConnected) return node;
+          changed = true;
+          return {
+            ...node,
+            online: true,
+            lastConnectedAt: touchLastConnected ? now : node.lastConnectedAt,
+          };
+        });
+        if (!changed) return previous;
+        nodesRef.current = next;
+        return next;
+      });
+    },
+    [],
+  );
 
   const markNodeOffline = useCallback((nodeId: string) => {
     setNodes((previous) => {
-      const next = previous.map((node) =>
-        node.id === nodeId ? { ...node, online: false } : node,
-      );
+      let changed = false;
+      const next = previous.map((node) => {
+        if (node.id !== nodeId || node.online === false) return node;
+        changed = true;
+        return { ...node, online: false };
+      });
+      if (!changed) return previous;
       nodesRef.current = next;
       return next;
     });

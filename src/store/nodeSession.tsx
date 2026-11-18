@@ -12,6 +12,7 @@ import { AppState, type AppStateStatus } from "react-native";
 
 import {
   ApiError,
+  isCredentialError,
   isDeviceAuthError,
   isTicketError,
   isTransportError,
@@ -22,7 +23,13 @@ import { translate } from "../i18n";
 import { describeError } from "../utils/format";
 import { useConnections, type SavedNode } from "./connections";
 
-export type NodeSessionStatus = "idle" | "connecting" | "online" | "offline";
+/** `unauthorized`: the node rejected this device; only re-pairing can heal it. */
+export type NodeSessionStatus =
+  | "idle"
+  | "connecting"
+  | "online"
+  | "offline"
+  | "unauthorized";
 
 export interface NodeConnection {
   node: SavedNode;
@@ -84,9 +91,9 @@ const RECONNECTING_MESSAGE = "连接中断，正在自动重连…";
 const TICKET_MESSAGE =
   "配对票据无效或已过期，请在电脑端刷新配对二维码后重新扫码配对。";
 const DEVICE_MESSAGE =
-  "电脑已拒绝这台设备（可能已被吊销），请删除节点后重新配对。";
+  "设备凭证已失效（可能已在电脑端被吊销或删除）。请删除节点后重新扫码配对。";
 const NODE_KEY_MESSAGE =
-  "节点公钥缺失或已变化，请删除节点后重新扫码配对。";
+  "这台节点的设备密钥已丢失，请删除后重新配对";
 
 function sessionNodeKey(node: SavedNode | null): string | null {
   if (!node) return null;
@@ -145,6 +152,15 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
     setContentEpoch(epochRef.current);
   }, []);
 
+  const stopRecovery = useCallback(() => {
+    if (recoveryTimerRef.current) {
+      clearTimeout(recoveryTimerRef.current);
+      recoveryTimerRef.current = null;
+    }
+    recoveringRef.current = false;
+    recoveryAttemptRef.current = 0;
+  }, []);
+
   const markOfflineState = useCallback(
     (reason: string) => {
       const node = nodeRef.current;
@@ -158,6 +174,23 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
       setMethods([]);
     },
     [markNodeOffline, setStatusValue],
+  );
+
+  /**
+   * The node answered the secure handshake but refused this device's
+   * credential. Reconnecting cannot heal that, so the retry loop stops and the
+   * UI asks for a fresh pairing instead of claiming the computer is offline.
+   */
+  const markUnauthorizedState = useCallback(
+    (reason: string) => {
+      const node = nodeRef.current;
+      if (node) markNodeOffline(node.id);
+      stopRecovery();
+      setStatusValue("unauthorized");
+      setError(translate(reason));
+      setMethods([]);
+    },
+    [markNodeOffline, setStatusValue, stopRecovery],
   );
 
   /** Records the authenticated device/session facts on the saved node. */
@@ -205,15 +238,6 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
     },
     [],
   );
-
-  const stopRecovery = useCallback(() => {
-    if (recoveryTimerRef.current) {
-      clearTimeout(recoveryTimerRef.current);
-      recoveryTimerRef.current = null;
-    }
-    recoveringRef.current = false;
-    recoveryAttemptRef.current = 0;
-  }, []);
 
   /** One heartbeat against the node; used to tell "slow" from "gone". */
   const channelAlive = useCallback(async (node: SavedNode): Promise<boolean> => {
@@ -274,6 +298,16 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
               if (isCurrent) setError(null);
             } catch (recoveryError) {
               recoveryAttemptRef.current += 1;
+              if (isCredentialError(recoveryError)) {
+                if (nodeRef.current?.id === node.id) {
+                  markUnauthorizedState(
+                    describeConnectionError(recoveryError),
+                  );
+                } else {
+                  stopRecovery();
+                }
+                return;
+              }
               if (
                 recoveryAttemptRef.current >= OFFLINE_AFTER_FAILURES &&
                 nodeRef.current?.id === node.id
@@ -291,6 +325,7 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
     [
       describeConnectionError,
       markOfflineState,
+      markUnauthorizedState,
       setStatusValue,
       stopRecovery,
       syncSession,
@@ -375,7 +410,9 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
       try {
         return await invokeForNode(node, invoke, options);
       } catch (requestError) {
-        if (isTransportError(requestError)) markNodeOffline(node.id);
+        if (isTransportError(requestError) || isCredentialError(requestError)) {
+          markNodeOffline(node.id);
+        }
         throw requestError;
       }
     },
@@ -395,12 +432,15 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
         return await invokeForNode(node, invoke, options);
       } catch (requestError) {
         if (isTransportError(requestError)) handleTransportFailure(requestError);
-        else if (isDeviceAuthError(requestError)) markOfflineState(DEVICE_MESSAGE);
-        else if (isUnauthorizedError(requestError)) markOfflineState(TICKET_MESSAGE);
+        else if (isDeviceAuthError(requestError)) {
+          markUnauthorizedState(DEVICE_MESSAGE);
+        } else if (isUnauthorizedError(requestError)) {
+          markOfflineState(TICKET_MESSAGE);
+        }
         throw requestError;
       }
     },
-    [handleTransportFailure, invokeForNode, markOfflineState],
+    [handleTransportFailure, invokeForNode, markOfflineState, markUnauthorizedState],
   );
 
   const reportRequestError = useCallback(
@@ -410,14 +450,14 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (isDeviceAuthError(requestError)) {
-        markOfflineState(DEVICE_MESSAGE);
+        markUnauthorizedState(DEVICE_MESSAGE);
         return;
       }
       if (isUnauthorizedError(requestError)) {
         markOfflineState(TICKET_MESSAGE);
       }
     },
-    [handleTransportFailure, markOfflineState],
+    [handleTransportFailure, markOfflineState, markUnauthorizedState],
   );
 
   const connect = useCallback(async () => {
@@ -431,7 +471,13 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
       syncSession(node, tunnel);
     } catch (connectError) {
       if (nodeRef.current?.id !== node.id) return;
-      markOfflineState(describeConnectionError(connectError));
+      const message = describeConnectionError(connectError);
+      if (isCredentialError(connectError)) {
+        // Re-pairing is the only fix; keep the card honest instead of retrying.
+        markUnauthorizedState(message);
+        return;
+      }
+      markOfflineState(message);
       // Keep retrying in the background; the card clears by itself when the
       // computer answers again.
       beginRecovery();
@@ -440,6 +486,7 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
     beginRecovery,
     describeConnectionError,
     markOfflineState,
+    markUnauthorizedState,
     setStatusValue,
     stopRecovery,
     syncSession,
@@ -456,8 +503,13 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
       return true;
     } catch (probeError) {
       if (nodeRef.current?.id === node.id) {
-        markOfflineState(describeConnectionError(probeError));
-        beginRecovery();
+        const message = describeConnectionError(probeError);
+        if (isCredentialError(probeError)) {
+          markUnauthorizedState(message);
+        } else {
+          markOfflineState(message);
+          beginRecovery();
+        }
       }
       return false;
     }
@@ -465,6 +517,7 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
     beginRecovery,
     describeConnectionError,
     markOfflineState,
+    markUnauthorizedState,
     stopRecovery,
     syncSession,
   ]);
@@ -507,7 +560,9 @@ export function NodeSessionProvider({ children }: { children: ReactNode }) {
         try {
           const tunnel = await tunnels.acquire(node);
           await tunnel.ping(HEALTH_TIMEOUT_MS);
-          if (nodeRef.current?.id === node.id) markNodeOnline(node.id);
+          // Heartbeats keep `online` fresh but are not a new connection, so
+          // they must not rewrite `lastConnectedAt`.
+          if (nodeRef.current?.id === node.id) markNodeOnline(node.id, false);
         } catch {
           if (nodeRef.current?.id === node.id) beginRecovery({ soft: true });
         }

@@ -148,6 +148,7 @@ const AUTH_ERROR_CODES = new Set([
   "REMOTE_HANDSHAKE_FAILED",
   "REMOTE_DEVICE_UNKNOWN",
   "REMOTE_DEVICE_REVOKED",
+  "REMOTE_AUTH_REJECTED",
   "REMOTE_PAIRING_TICKET_INVALID",
   "REMOTE_PAIRING_TICKET_EXPIRED",
   "REMOTE_E2EE_REQUIRED",
@@ -235,7 +236,8 @@ export function isDeviceAuthError(error: unknown): boolean {
   return (
     error instanceof ApiError &&
     (error.code === "REMOTE_DEVICE_UNKNOWN" ||
-      error.code === "REMOTE_DEVICE_REVOKED")
+      error.code === "REMOTE_DEVICE_REVOKED" ||
+      error.code === "REMOTE_AUTH_REJECTED")
   );
 }
 
@@ -245,6 +247,18 @@ export function isTicketError(error: unknown): boolean {
     error instanceof ApiError &&
     (error.code === "REMOTE_PAIRING_TICKET_INVALID" ||
       error.code === "REMOTE_PAIRING_TICKET_EXPIRED")
+  );
+}
+
+/**
+ * True when the node refused this device's credential, so reconnecting cannot
+ * heal the session. The node has to pair the device again.
+ */
+export function isCredentialError(error: unknown): boolean {
+  return (
+    isDeviceAuthError(error) ||
+    isTicketError(error) ||
+    (error instanceof ApiError && error.code === "DEVICE_KEY_MISSING")
   );
 }
 

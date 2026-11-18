@@ -15,6 +15,7 @@ import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 import { InlineBanner } from "../components/InlineBanner";
+import { NodeLatencyText } from "../components/NodeLatency";
 import { Screen } from "../components/Screen";
 import { StatusDot } from "../components/StatusDot";
 import { SegmentedControl } from "../components/SegmentedControl";
@@ -363,6 +364,11 @@ export function SettingsScreen() {
                                 {node.baseUrl}
                               </Text>
                             </View>
+                            <NodeLatencyText
+                              nodeId={node.id}
+                              showPlaceholder
+                              style={styles.nodeLatency}
+                            />
                             <Pressable
                               accessibilityRole="button"
                               accessibilityLabel={format("删除节点：{name}", {
@@ -561,6 +567,10 @@ const createStyles = (c: Palette) =>
       ...typography.mono,
       fontSize: 10,
       letterSpacing: 0.2,
+    },
+    nodeLatency: {
+      marginLeft: spacing.xs,
+      fontSize: 10,
     },
     nodeEmpty: {
       color: c.muted,

@@ -183,8 +183,6 @@ export const enMessages: Record<string, string> = {
   "这台节点的配对令牌已不存在，请删除后重新扫码或手动配对。":
     "This node's pairing token is gone. Delete it and pair again by scan or manually.",
   "进入会话": "Open session",
-  "进入该节点的会话首页，长按可删除":
-    "Open this node's sessions. Long-press to delete.",
   "进入这个个人助手的会话": "Open this PersonAI's session",
   "连接中": "Connecting",
   "连接信息缺失或电脑离线，请返回重新连接节点":
@@ -287,6 +285,11 @@ export const enMessages: Record<string, string> = {
   "{count} 天前": "{count} days ago",
   "最近连接 {time}": "Last connected {time}",
   "打开节点：{name}": "Open node {name}",
+  "打开节点": "Open node",
+  "节点菜单：{name}": "Actions for node {name}",
+  "打开节点操作菜单": "Open the node actions menu",
+  "进入该节点的会话首页，长按可管理节点":
+    "Open this node's sessions. Long-press to manage it.",
   "在 {name} 上新建会话": "Start a new session on {name}",
   "删除节点：{name}": "Delete node {name}",
   "展开产品：{name}": "Expand product {name}",
@@ -464,6 +467,12 @@ export const enMessages: Record<string, string> = {
   "设备密钥无法写入系统安全存储，本次连接仅在当前进程内有效。":
     "The device key could not be written to secure storage; this connection only lasts for the current process.",
   "设备密钥缺失，请重新配对。": "The device key is missing. Pair again.",
+  "设备凭证已失效（可能已在电脑端被吊销或删除）。请删除节点后重新扫码配对。":
+    "This device's credential is no longer valid (it may have been revoked or deleted on the computer). Delete the node and scan the pairing code again.",
+  "电脑端已吊销或删除了这台设备的配对凭证。请删除节点后重新扫码配对。":
+    "The computer revoked or deleted this device's pairing credential. Delete the node and scan the pairing code again.",
+  "凭证失效": "Credential invalid",
+  "管理节点": "Manage nodes",
   "请求失败（{code}）": "Request failed ({code}).",
   "请求数据过大，无法发送": "The request payload is too large to send.",
   "请求超时，请稍后重试": "The request timed out. Try again later.",

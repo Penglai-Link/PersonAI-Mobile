@@ -1,6 +1,6 @@
 import { useFocusEffect } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -11,9 +11,11 @@ import {
   StyleSheet,
   Text,
   View,
+  type PressableInstance,
 } from "react-native";
 
 import { loadDeviceKey } from "../crypto/keys";
+import { ActionMenu, type ActionMenuItem } from "../components/ActionMenu";
 import { AppHeader } from "../components/AppHeader";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
@@ -49,7 +51,6 @@ export function NodesScreen({ navigation, route }: Props) {
     products,
     nodes,
     ready,
-    probing,
     currentProductCode,
     currentNode,
     selectProduct,
@@ -59,6 +60,35 @@ export function NodesScreen({ navigation, route }: Props) {
   } = useConnections();
   const { status: sessionStatus } = useNodeSession();
   const [openingId, setOpeningId] = useState<string | null>(null);
+  // The native pull-to-refresh spinner is user-initiated only. It used to be
+  // bound to the global `probing` flag, so every background probe (focus,
+  // network path update) animated the spinner without anyone pulling.
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshingRef = useRef(false);
+  const onPullRefresh = useCallback(async () => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setRefreshing(true);
+    try {
+      await refreshNodeStatuses();
+    } finally {
+      refreshingRef.current = false;
+      setRefreshing(false);
+    }
+  }, [refreshNodeStatuses]);
+
+  const refreshControl = useMemo(
+    () => (
+      <RefreshControl
+        refreshing={refreshing}
+        onRefresh={() => void onPullRefresh()}
+        tintColor={palette.accent}
+        colors={[palette.accent]}
+        progressBackgroundColor={palette.surface}
+      />
+    ),
+    [onPullRefresh, palette.accent, palette.surface, refreshing],
+  );
 
   const product = products.find((item) => item.code === productCode) ?? null;
   const productNodes = useMemo(
@@ -150,15 +180,7 @@ export function NodesScreen({ navigation, route }: Props) {
       ) : productNodes.length === 0 ? (
         <ScrollView
           contentContainerStyle={styles.emptyScroll}
-          refreshControl={
-            <RefreshControl
-              refreshing={probing}
-              onRefresh={() => void refreshNodeStatuses()}
-              tintColor={palette.accent}
-              colors={[palette.accent]}
-              progressBackgroundColor={palette.surface}
-            />
-          }
+          refreshControl={refreshControl}
         >
           <EmptyState
             icon="laptop-outline"
@@ -194,26 +216,23 @@ export function NodesScreen({ navigation, route }: Props) {
       ) : (
         <ScrollView
           contentContainerStyle={styles.listContent}
-          refreshControl={
-            <RefreshControl
-              refreshing={probing}
-              onRefresh={() => void refreshNodeStatuses()}
-              tintColor={palette.accent}
-              colors={[palette.accent]}
-              progressBackgroundColor={palette.surface}
-            />
-          }
+          refreshControl={refreshControl}
         >
           <View style={styles.list}>
             {productNodes.map((node) => {
               const sessionOffline =
-                currentNode?.id === node.id && sessionStatus === "offline";
+                currentNode?.id === node.id &&
+                (sessionStatus === "offline" ||
+                  sessionStatus === "unauthorized");
+              const credentialInvalid =
+                currentNode?.id === node.id && sessionStatus === "unauthorized";
               const online = sessionOffline ? false : node.online;
               return (
                 <NodeCard
                   key={node.id}
                   node={node}
                   online={online}
+                  credentialInvalid={credentialInvalid}
                   current={currentNode?.id === node.id}
                   opening={openingId === node.id}
                   onOpen={() => void openNode(node)}
@@ -236,6 +255,7 @@ export function NodesScreen({ navigation, route }: Props) {
 function NodeCard({
   node,
   online,
+  credentialInvalid,
   current,
   opening,
   onOpen,
@@ -243,6 +263,7 @@ function NodeCard({
 }: {
   node: SavedNode;
   online: boolean | null;
+  credentialInvalid: boolean;
   current: boolean;
   opening: boolean;
   onOpen: () => void;
@@ -251,21 +272,54 @@ function NodeCard({
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
   const { t, format } = useI18n();
-  const statusLabel =
-    online === true
+  const moreRef = useRef<PressableInstance>(null);
+  const [menuAnchor, setMenuAnchor] = useState<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const statusLabel = credentialInvalid
+    ? t("凭证失效")
+    : online === true
       ? t("在线")
       : online === false
         ? t("离线")
         : t("检测中");
+
+  const openMenu = useCallback(() => {
+    moreRef.current?.measureInWindow((x, y, width, height) => {
+      setMenuAnchor({ x, y, width, height });
+    });
+  }, []);
+
+  const menuItems: ActionMenuItem[] = useMemo(
+    () => [
+      {
+        key: "open",
+        label: t("打开节点"),
+        icon: "open-outline",
+        onPress: onOpen,
+      },
+      {
+        key: "delete",
+        label: t("删除节点"),
+        icon: "trash-outline",
+        destructive: true,
+        onPress: onRemove,
+      },
+    ],
+    [onOpen, onRemove, t],
+  );
 
   return (
     <View style={[styles.card, current && styles.cardCurrent]}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={format("打开节点：{name}", { name: node.name })}
-        accessibilityHint={t("进入该节点的会话首页，长按可删除")}
+        accessibilityHint={t("进入该节点的会话首页，长按可管理节点")}
         onPress={onOpen}
-        onLongPress={onRemove}
+        onLongPress={openMenu}
         delayLongPress={450}
         style={({ pressed }) => [styles.cardBody, pressed && styles.pressed]}
       >
@@ -331,14 +385,25 @@ function NodeCard({
       </Pressable>
 
       <Pressable
+        ref={moreRef}
         accessibilityRole="button"
-        accessibilityLabel={format("删除节点：{name}", { name: node.name })}
-        onPress={onRemove}
+        accessibilityLabel={format("节点菜单：{name}", { name: node.name })}
+        accessibilityHint={t("打开节点操作菜单")}
+        accessibilityState={{ expanded: menuAnchor !== null }}
+        onPress={openMenu}
         hitSlop={8}
         style={({ pressed }) => [styles.moreButton, pressed && styles.pressed]}
       >
         <Ionicons name="ellipsis-horizontal" size={18} color={palette.muted} />
       </Pressable>
+
+      <ActionMenu
+        visible={menuAnchor !== null}
+        anchor={menuAnchor}
+        items={menuItems}
+        onClose={() => setMenuAnchor(null)}
+        dismissLabel={t("关闭菜单")}
+      />
     </View>
   );
 }

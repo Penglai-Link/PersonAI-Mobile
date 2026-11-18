@@ -52,7 +52,6 @@ export function AssistantCard({
       onPress={onPress}
       style={({ pressed }) => [
         styles.card,
-        assistant.isMain && styles.cardMain,
         !assistant.enabled && styles.disabled,
         pressed && styles.pressed,
       ]}
@@ -104,10 +103,6 @@ const createStyles = (c: Palette) =>
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: c.border,
       gap: spacing.sm,
-    },
-    cardMain: {
-      borderColor: c.accentBorder,
-      backgroundColor: c.surfaceAlt,
     },
     disabled: {
       opacity: 0.65,
