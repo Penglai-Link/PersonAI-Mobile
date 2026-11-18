@@ -2,6 +2,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
+  Image,
   Keyboard,
   Platform,
   Pressable,
@@ -12,6 +13,10 @@ import {
   View,
 } from "react-native";
 
+import * as Clipboard from "expo-clipboard";
+import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system/legacy";
+import * as ImageManipulator from "expo-image-manipulator";
 import {
   ASSISTANT_SOURCE_TYPE,
   listAssistants,
@@ -24,6 +29,8 @@ import {
   sendChatMessageStream,
   steerChatMessage,
   stopChatRun,
+  uploadChatAttachment,
+  type ChatAttachment,
   type ChatMessage,
 } from "../api/tron";
 import type { AgUiEvent } from "../api/rpc";
@@ -37,7 +44,10 @@ import { NodeLatencyText } from "../components/NodeLatency";
 import { RunProcess } from "../components/RunProcess";
 import {
   ApprovalCard,
+  Composer,
   MessageBubble as AgentMessageBubble,
+  type ComposerAttachment,
+  type ComposerClipboardFile,
 } from "@personai/agent-ui-chat-react-native";
 import {
   ChatA2uiSession,
@@ -55,7 +65,7 @@ import {
 } from "@personai/agent-ui-chat-core/headless";
 import { Screen } from "../components/Screen";
 import { Ionicons } from "../components/icons";
-import { useI18n } from "../i18n";
+import { translate, useI18n } from "../i18n";
 import type { RootStackParamList } from "../navigation/types";
 import { useNodeSession } from "../store/nodeSession";
 import {
@@ -82,6 +92,17 @@ interface QueuedChatMessage {
   content: string;
 }
 
+/**
+ * A turn the node started and then failed (`RUN_ERROR`). It is kept next to the
+ * transcript instead of only in the error banner so the process view and the
+ * retry stay attached to the message that failed.
+ */
+interface RunFailure {
+  trace: RunTrace;
+  content: string;
+  attachments: ChatAttachment[];
+}
+
 function toAgentMessage(
   message: ChatMessage,
   sessionCode: string,
@@ -106,6 +127,121 @@ function toAgentMessage(
     runId: message.runCode ?? null,
     ...(message.a2ui ? { a2ui: message.a2ui } : {}),
   };
+}
+
+function fileNameFromUri(uri: string): string {
+  const clean = uri.split(/[?#]/)[0] ?? "";
+  const name = clean.split("/").filter(Boolean).pop();
+  return name && name.includes(".") ? decodeURIComponent(name) : `pasted-file-${Date.now()}`;
+}
+
+function mimeFromName(name: string): string {
+  const extension = name.split(".").pop()?.toLowerCase() ?? "";
+  if (["png", "jpg", "jpeg", "webp", "gif", "heic"].includes(extension)) {
+    return extension === "jpg" ? "image/jpeg" : `image/${extension}`;
+  }
+  if (extension === "pdf") return "application/pdf";
+  if (["txt", "md", "json", "csv"].includes(extension)) {
+    return extension === "md" ? "text/markdown" : `text/${extension}`;
+  }
+  return "application/octet-stream";
+}
+
+function stripDataUri(data: string): string {
+  const index = data.indexOf(",");
+  return data.startsWith("data:") && index >= 0 ? data.slice(index + 1) : data;
+}
+
+async function fileBase64(value: string | null | undefined): Promise<string> {
+  if (!value) throw new Error(translate("剪贴板里没有可读取的文件"));
+  // ImageManipulator and clipboard adapters may hand back raw base64 instead
+  // of a URI; do not send that through the file-system reader.
+  if (!/^(file|content|https?|data):/i.test(value)) return stripDataUri(value);
+  const uri = value;
+  if (uri.startsWith("data:")) return stripDataUri(uri);
+  if (/^https?:/i.test(uri)) {
+    const target = `${FileSystem.cacheDirectory ?? ""}pasted-${Date.now()}`;
+    const downloaded = await FileSystem.downloadAsync(uri, target);
+    return FileSystem.readAsStringAsync(downloaded.uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+  }
+  return FileSystem.readAsStringAsync(uri, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
+}
+
+/** Survives the ChatScreen remount that follows the document-picker activity. */
+let pendingUploadFile: { id: string; file: ComposerClipboardFile } | null = null;
+
+const MAX_IMAGE_EDGE = 1280;
+const IMAGE_QUALITY = 0.75;
+
+/**
+ * Pasted/picked photos are normalized before upload: downscale large images to
+ * `MAX_IMAGE_EDGE` and re-encode as JPEG. Non-images and failures fall back to
+ * the original file.
+ */
+async function prepareImageFile(
+  file: ComposerClipboardFile,
+): Promise<ComposerClipboardFile> {
+  const mimeType = file.mimeType?.trim() || mimeFromName(file.name);
+  if (!mimeType.startsWith("image/")) return file;
+  try {
+    let source = file.uri ?? undefined;
+    if (!source || source.startsWith("data:")) {
+      const base64 = stripDataUri(file.base64 ?? source ?? "");
+      if (!base64) return file;
+      const extension = mimeType.split("/")[1] || "png";
+      source = `${FileSystem.cacheDirectory ?? ""}pasted-source-${Date.now()}.${extension}`;
+      await FileSystem.writeAsStringAsync(source, base64, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+    }
+    const dimensions = await Promise.race([
+      new Promise<{ width: number; height: number } | null>((resolve) => {
+        Image.getSize(
+          source!,
+          (width, height) => resolve({ width, height }),
+          () => resolve(null),
+        );
+      }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500)),
+    ]);
+    const longest = dimensions
+      ? Math.max(dimensions.width, dimensions.height)
+      : 0;
+    const actions =
+      dimensions && longest > MAX_IMAGE_EDGE
+        ? [
+            dimensions.width >= dimensions.height
+              ? { resize: { width: MAX_IMAGE_EDGE } }
+              : { resize: { height: MAX_IMAGE_EDGE } },
+          ]
+        : [];
+    const compressed = await Promise.race([
+      ImageManipulator.manipulateAsync(source, actions, {
+        base64: true,
+        compress: IMAGE_QUALITY,
+        format: ImageManipulator.SaveFormat.JPEG,
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("image processing timed out")), 8000),
+      ),
+    ]);
+    const base64 = compressed.base64;
+    if (!base64) return file;
+    const baseName = file.name.replace(/\.[^.]+$/, "") || `pasted-image-${Date.now()}`;
+    return {
+      name: `${baseName}.jpg`,
+      mimeType: "image/jpeg",
+      base64,
+      uri: compressed.uri,
+      size: Math.round(base64.length * 0.75),
+    };
+  } catch {
+    return file;
+  }
 }
 
 export function ChatScreen({ navigation, route }: Props) {
@@ -174,8 +310,12 @@ export function ChatScreen({ navigation, route }: Props) {
     () => new Map(),
   );
   const [liveTrace, setLiveTrace] = useState<RunTrace | null>(null);
+  const [runFailure, setRunFailure] = useState<RunFailure | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [queued, setQueued] = useState<QueuedChatMessage[]>([]);
+  const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
+  const [attachmentPreviews, setAttachmentPreviews] = useState<Record<string, string>>({});
+  const [attachmentUploading, setAttachmentUploading] = useState(false);
   const [pendingRequests, setPendingRequests] = useState<ChatUserInputRequest[]>([]);
   const [answeredRequests, setAnsweredRequests] = useState<ChatUserInputRequest[]>([]);
   const [answering, setAnswering] = useState(false);
@@ -201,9 +341,9 @@ export function ChatScreen({ navigation, route }: Props) {
   const a2uiBusyRef = useRef(false);
   /** Assistant name lookup for sessions opened without one (drawer, running). */
   const assistantLookupRef = useRef<string>("");
-  const runMessageRef = useRef<(content: string) => Promise<void>>(
-    async () => undefined,
-  );
+  const runMessageRef = useRef<
+    (content: string, attachments?: ChatAttachment[]) => Promise<void>
+  >(async () => undefined);
 
   useEffect(() => {
     const givenName = route.params.assistantName?.trim();
@@ -345,6 +485,173 @@ export function ChatScreen({ navigation, route }: Props) {
     workspaceCode,
   ]);
 
+  const readClipboardFile = useCallback(async (): Promise<ComposerClipboardFile | null> => {
+    const image = await Clipboard.getImageAsync({ format: "png" });
+    if (image?.data) {
+      return {
+        name: `pasted-image-${Date.now()}.png`,
+        mimeType: "image/png",
+        base64: image.data,
+        uri: image.data,
+      };
+    }
+    const url = (await Clipboard.getUrlAsync())?.trim();
+    if (url && /^(file|content):/i.test(url)) {
+      const name = fileNameFromUri(url);
+      return { name, uri: url, mimeType: mimeFromName(name) };
+    }
+    const text = (await Clipboard.getStringAsync())?.trim();
+    if (text && /^(file|content):\/\//i.test(text)) {
+      const name = fileNameFromUri(text);
+      return { name, uri: text, mimeType: mimeFromName(name) };
+    }
+    return null;
+  }, []);
+
+  const clipboardAdapter = useMemo(
+    () => ({ readFile: readClipboardFile }),
+    [readClipboardFile],
+  );
+
+  const uploadComposerFile = useCallback(
+    async (file: ComposerClipboardFile, tempId?: string) => {
+      if (!workspaceCode || sessionStatus !== "online") {
+        setError(t("连接信息缺失或电脑离线，请返回重新连接节点"));
+        return;
+      }
+      if (attachmentUploading) return;
+      setAttachmentUploading(true);
+      try {
+        const prepared = await prepareImageFile(file);
+        const mimeType =
+          prepared.mimeType?.trim() || mimeFromName(prepared.name);
+        const dataBase64 = await fileBase64(
+          prepared.base64 ?? prepared.uri,
+        );
+        const attachment = await sessionRequest(
+          ({ tunnel }) =>
+            uploadChatAttachment({
+              tunnel,
+              sessionCode,
+              workspaceCode,
+              assistantCode: effectiveAssistantCode,
+              fileName:
+                prepared.name || fileNameFromUri(prepared.uri ?? ""),
+              contentType: mimeType,
+              dataBase64,
+              kind: mimeType.startsWith("image/") ? "image" : "file",
+              summary: prepared.name,
+            }),
+          { retry: false },
+        );
+        if (!mountedRef.current) return;
+        setPendingAttachments((previous) =>
+          tempId
+            ? previous.map((item) => (item.id === tempId ? attachment : item))
+            : [...previous, attachment],
+        );
+        const preview =
+          prepared.uri &&
+          (prepared.uri.startsWith("data:") || /^(file|content):/i.test(prepared.uri))
+            ? prepared.uri
+            : attachment.imageUrl ?? undefined;
+        if (preview || tempId) {
+          setAttachmentPreviews((previous) => {
+            const next = { ...previous };
+            if (tempId) delete next[tempId];
+            if (preview) next[attachment.id] = preview;
+            return next;
+          });
+        }
+      } catch (uploadError) {
+        if (mountedRef.current && !isAbortError(uploadError)) {
+          setError(describeError(uploadError));
+        }
+        if (tempId && mountedRef.current) {
+          setPendingAttachments((previous) =>
+            previous.filter((item) => item.id !== tempId),
+          );
+          setAttachmentPreviews((previous) => {
+            const next = { ...previous };
+            delete next[tempId];
+            return next;
+          });
+        }
+      } finally {
+        if (mountedRef.current) setAttachmentUploading(false);
+      }
+    },
+    [
+      attachmentUploading,
+      effectiveAssistantCode,
+      sessionCode,
+      sessionRequest,
+      sessionStatus,
+      t,
+      workspaceCode,
+    ],
+  );
+
+  const queueComposerFile = useCallback(
+    (file: ComposerClipboardFile) => {
+      const tempId = `local-attachment-${Date.now()}`;
+      const mimeType = file.mimeType?.trim() || mimeFromName(file.name);
+      const preview = file.base64
+        ? `data:${mimeType};base64,${stripDataUri(file.base64)}`
+        : file.uri ?? undefined;
+      const local: ChatAttachment = {
+        id: tempId,
+        kind: mimeType.startsWith("image/") ? "image" : "file",
+        title: file.name,
+        summary: file.name,
+        imageUrl: preview ?? null,
+        resourceCode: null,
+        fileName: file.name,
+        contentType: mimeType,
+        byteSize: file.size ?? null,
+        metadata: { uploading: true },
+      };
+      setPendingAttachments((previous) => [...previous, local]);
+      if (preview) {
+        setAttachmentPreviews((previous) => ({
+          ...previous,
+          [tempId]: preview,
+        }));
+      }
+      pendingUploadFile = { id: tempId, file };
+      if (sessionStatus === "online") {
+        pendingUploadFile = null;
+        void uploadComposerFile(file, tempId);
+      } else {
+        setNotice(t("正在重新连接，连接成功后会自动上传附件"));
+      }
+    },
+    [sessionStatus, t, uploadComposerFile],
+  );
+
+  useEffect(() => {
+    if (sessionStatus !== "online") return;
+    const queued = pendingUploadFile;
+    if (!queued) return;
+    pendingUploadFile = null;
+    void uploadComposerFile(queued.file, queued.id);
+  }, [sessionStatus, uploadComposerFile]);
+
+  const pickAttachment = useCallback(async () => {
+    const result = await DocumentPicker.getDocumentAsync({
+      copyToCacheDirectory: true,
+      multiple: false,
+    });
+    if (result.canceled || !result.assets[0]) return;
+    const asset = result.assets[0];
+    queueComposerFile({
+      name: asset.name || fileNameFromUri(asset.uri),
+      uri: asset.uri,
+      mimeType: asset.mimeType || mimeFromName(asset.name || asset.uri),
+      size: asset.size,
+    });
+  }, [queueComposerFile]);
+
   const loadMessages = useCallback(
     async (showSpinner: boolean) => {
       if (!workspaceCode || sessionStatus !== "online") {
@@ -430,9 +737,12 @@ export function ChatScreen({ navigation, route }: Props) {
     setTraces(new Map());
     setLiveTrace(null);
     liveTraceRef.current = null;
+    setRunFailure(null);
     setActiveRunId(null);
     queuedRef.current = [];
     setQueued([]);
+    setPendingAttachments([]);
+    setAttachmentPreviews({});
     setPendingRequests([]);
     setAnsweredRequests([]);
     setAnswering(false);
@@ -457,29 +767,33 @@ export function ChatScreen({ navigation, route }: Props) {
     void loadMessages(true);
   }, [loadMessages, sessionStatus]);
 
-  const reloadMessages = useCallback(async (): Promise<ChatMessage[] | null> => {
-    if (!workspaceCode || sessionStatus !== "online") return null;
-    const sequence = ++messagesSeqRef.current;
-    try {
-      const next = await sessionRequest(({ tunnel }) =>
-        listChatMessages({
-          tunnel,
-          sessionCode,
-          workspaceCode,
-          assistantCode: effectiveAssistantCode,
-        }),
-      );
-      if (mountedRef.current && sequence === messagesSeqRef.current) {
-        setMessages(next);
-        setError(null);
-        refreshProtocolEvents(sequence);
+  const reloadMessages = useCallback(
+    async (options: { clearError?: boolean } = {}): Promise<ChatMessage[] | null> => {
+      if (!workspaceCode || sessionStatus !== "online") return null;
+      const sequence = ++messagesSeqRef.current;
+      try {
+        const next = await sessionRequest(({ tunnel }) =>
+          listChatMessages({
+            tunnel,
+            sessionCode,
+            workspaceCode,
+            assistantCode: effectiveAssistantCode,
+          }),
+        );
+        if (mountedRef.current && sequence === messagesSeqRef.current) {
+          setMessages(next);
+          // A failed send reloads the transcript to drop its optimistic row;
+          // that reload must not also erase the failure the user has to see.
+          if (options.clearError !== false) setError(null);
+          refreshProtocolEvents(sequence);
+        }
+        return next;
+      } catch {
+        // Keep the visible error from the failed send.
+        return null;
       }
-      return next;
-    } catch {
-      // Keep the visible error from the failed send.
-      return null;
-    }
-  }, [
+    },
+    [
     effectiveAssistantCode,
     refreshProtocolEvents,
     sessionCode,
@@ -496,10 +810,12 @@ export function ChatScreen({ navigation, route }: Props) {
   // content-size callback, which used to leave the transcript parked above the
   // newest turn. One short deferred scroll settles it on the real bottom.
   useEffect(() => {
-    if (!messages.length && !sending && !pendingRequests.length) return;
+    if (!messages.length && !sending && !pendingRequests.length && !runFailure) {
+      return;
+    }
     const timer = setTimeout(() => scrollToBottom(false), 120);
     return () => clearTimeout(timer);
-  }, [messages, pendingRequests.length, scrollToBottom, sending]);
+  }, [messages, pendingRequests.length, runFailure, scrollToBottom, sending]);
 
   useEffect(() => {
     const subscription = Keyboard.addListener(
@@ -512,9 +828,9 @@ export function ChatScreen({ navigation, route }: Props) {
   }, [scrollToBottom]);
 
   const runMessage = useCallback(
-    async (rawContent: string) => {
+    async (rawContent: string, attachments: ChatAttachment[] = []) => {
       const content = rawContent.trim();
-      if (!content || sendingRef.current) return;
+      if ((!content && !attachments.length) || sendingRef.current) return;
       if (!workspaceCode || sessionStatus !== "online") {
         setError(t("连接信息缺失或电脑离线，请返回重新连接节点"));
         return;
@@ -524,6 +840,7 @@ export function ChatScreen({ navigation, route }: Props) {
       setSending(true);
       setError(null);
       setNotice(null);
+      setRunFailure(null);
       setStreamText("");
       setLiveTrace(null);
       liveTraceRef.current = null;
@@ -538,7 +855,7 @@ export function ChatScreen({ navigation, route }: Props) {
         channel: "MAIN_AGENT",
         actor: "user",
         content,
-        attachments: [],
+        attachments,
         createdAt: new Date().toISOString(),
       };
 
@@ -559,6 +876,7 @@ export function ChatScreen({ navigation, route }: Props) {
               sessionCode,
               workspaceCode,
               content,
+              attachments,
               assistantCode: effectiveAssistantCode,
               signal: controller.signal,
               onDelta: (delta) => {
@@ -609,27 +927,46 @@ export function ChatScreen({ navigation, route }: Props) {
         // earlier history is preserved and server message codes replace the
         // optimistic row.
         const reloaded = await reloadMessages();
-        const persistedReply = reloaded?.some(
-          (message) =>
-            message.role === "ASSISTANT" && message.content.trim().length > 0,
-        );
-        if (
-          !persistedReply &&
-          result.messages.length === 0 &&
-          accumulated.trim()
-        ) {
-          const synthetic: ChatMessage = {
-            id: `stream-${Date.now()}`,
-            messageCode: `stream-${Date.now()}`,
-            sessionCode,
-            role: "ASSISTANT",
-            channel: "MAIN_AGENT",
-            actor: "assistant",
-            content: accumulated,
-            attachments: [],
-            createdAt: new Date().toISOString(),
-          };
-          setMessages((previous) => [...previous, synthetic]);
+        const hasReply = (list: ChatMessage[] | null | undefined): boolean =>
+          Boolean(
+            list?.some(
+              (message) =>
+                message.role === "ASSISTANT" &&
+                message.content.trim().length > 0,
+            ),
+          );
+        if (!hasReply(reloaded)) {
+          // The node commits the reply before `RUN_FINISHED`, but the reload can
+          // still race it — or fail. Fall back to the run result, then to the
+          // streamed text, so a finished turn never renders as nothing.
+          const carriedReply = result.messages.filter(
+            (message) =>
+              message.role === "ASSISTANT" &&
+              message.content.trim().length > 0,
+          );
+          if (carriedReply.length) {
+            setMessages((previous) => {
+              const known = new Set(previous.map((item) => String(item.id)));
+              return [
+                ...previous,
+                ...carriedReply.filter((item) => !known.has(String(item.id))),
+              ];
+            });
+          } else if (accumulated.trim()) {
+            const syntheticId = `stream-${Date.now()}`;
+            const synthetic: ChatMessage = {
+              id: syntheticId,
+              messageCode: syntheticId,
+              sessionCode,
+              role: "ASSISTANT",
+              channel: "MAIN_AGENT",
+              actor: "assistant",
+              content: accumulated,
+              attachments: [],
+              createdAt: new Date().toISOString(),
+            };
+            setMessages((previous) => [...previous, synthetic]);
+          }
         }
 
         // Protocol replay may be unavailable on older nodes; keep the trace we
@@ -651,8 +988,27 @@ export function ChatScreen({ navigation, route }: Props) {
         }
 
         reportRequestError(sendError);
-        setError(describeError(sendError));
-        await reloadMessages();
+        // `liveTraceRef.current` is assigned from the event callback, which the
+        // compiler does not model; read it through an assertion so the trace the
+        // run just produced is not narrowed away.
+        const failedTrace = liveTraceRef.current as RunTrace | null;
+        if (failedTrace && failedTrace.status === "failed") {
+          // The node answered `RUN_ERROR`: the turn itself failed. Keep the
+          // process and its reason attached to the transcript (with a retry)
+          // instead of a banner that the follow-up reload used to clear.
+          setRunFailure({
+            trace: failedTrace,
+            content,
+            attachments,
+          });
+          setTraces((previous) =>
+            new Map(previous).set(failedTrace.runId, failedTrace),
+          );
+        } else {
+          setError(describeError(sendError));
+        }
+        // Drop the optimistic row, but never clear the failure just reported.
+        await reloadMessages({ clearError: false });
       } finally {
         if (streamControllerRef.current === controller) {
           streamControllerRef.current = null;
@@ -694,9 +1050,18 @@ export function ChatScreen({ navigation, route }: Props) {
     runMessageRef.current = runMessage;
   }, [runMessage]);
 
+  /** Resends the turn whose run failed, keeping its attachments. */
+  const retryRunFailure = useCallback(() => {
+    const failure = runFailure;
+    if (!failure || sendingRef.current) return;
+    setRunFailure(null);
+    void runMessage(failure.content, failure.attachments);
+  }, [runFailure, runMessage]);
+
   const handleSend = useCallback(() => {
     const content = input.trim();
-    if (!content || sendingRef.current) return;
+    const attachments = pendingAttachments;
+    if ((!content && !attachments.length) || sendingRef.current) return;
     if (pendingRequests.length > 0 || answering) {
       setNotice(t("请先完成上面的回答"));
       return;
@@ -706,10 +1071,13 @@ export function ChatScreen({ navigation, route }: Props) {
       return;
     }
     setInput("");
-    void runMessage(content);
+    setPendingAttachments([]);
+    setAttachmentPreviews({});
+    void runMessage(content, attachments);
   }, [
     answering,
     input,
+    pendingAttachments,
     pendingRequests.length,
     runMessage,
     sessionStatus,
@@ -772,6 +1140,18 @@ export function ChatScreen({ navigation, route }: Props) {
 
   const removeQueued = useCallback((id: string) => {
     const next = queuedRef.current.filter((item) => item.id !== id);
+    queuedRef.current = next;
+    setQueued(next);
+  }, []);
+
+  const reorderQueued = useCallback((sourceId: string, targetId: string) => {
+    const current = queuedRef.current;
+    const source = current.findIndex((item) => item.id === sourceId);
+    const target = current.findIndex((item) => item.id === targetId);
+    if (source < 0 || target < 0 || source === target) return;
+    const next = current.slice();
+    const [moved] = next.splice(source, 1);
+    next.splice(target, 0, moved);
     queuedRef.current = next;
     setQueued(next);
   }, []);
@@ -1019,7 +1399,7 @@ export function ChatScreen({ navigation, route }: Props) {
   const offline = sessionStatus === "offline";
   const disconnected = offline || unauthorized;
   const canSend =
-    Boolean(input.trim()) &&
+    (Boolean(input.trim()) || pendingAttachments.length > 0) &&
     !sending &&
     !answering &&
     pendingRequests.length === 0 &&
@@ -1211,7 +1591,7 @@ export function ChatScreen({ navigation, route }: Props) {
                   )
                 }
                 ListFooterComponent={
-                  sending || pendingRequests.length ? (
+                  sending || pendingRequests.length || runFailure ? (
                     <View>
                       {sending ? (
                         <>
@@ -1236,11 +1616,27 @@ export function ChatScreen({ navigation, route }: Props) {
                           theme={agentTheme}
                         />
                       ))}
+                      {runFailure ? (
+                        <View style={styles.failureWrap}>
+                          <RunProcess trace={runFailure.trace} />
+                          <InlineBanner
+                            message={t("这次没有生成回复，可以重试")}
+                            tone="danger"
+                            actionLabel={t("重试")}
+                            onAction={retryRunFailure}
+                          />
+                        </View>
+                      ) : null}
                     </View>
                   ) : undefined
                 }
                 onContentSizeChange={() => {
-                  if (transcriptMessages.length || sending || pendingRequests.length) {
+                  if (
+                    transcriptMessages.length ||
+                    sending ||
+                    pendingRequests.length ||
+                    runFailure
+                  ) {
                     requestAnimationFrame(() => scrollToBottom(false));
                   }
                 }}
@@ -1249,144 +1645,83 @@ export function ChatScreen({ navigation, route }: Props) {
                 showsVerticalScrollIndicator={false}
               />
 
-              <View
-                style={[
-                  styles.composerWrap,
-                  { paddingHorizontal: horizontalPadding },
-                ]}
-              >
-                {queued.length ? (
-                  <View style={styles.queueList}>
-                    {queued.map((item) => (
-                      <View key={item.id} style={styles.queueItem}>
-                        <Ionicons
-                          name="time-outline"
-                          size={13}
-                          color={palette.muted}
-                        />
-                        <Text style={styles.queueText} numberOfLines={2}>
-                          {item.content}
-                        </Text>
-                        <Pressable
-                          accessibilityRole="button"
-                          accessibilityLabel={t("移除排队消息")}
-                          hitSlop={8}
-                          onPress={() => removeQueued(item.id)}
-                        >
-                          <Ionicons name="close" size={14} color={palette.muted} />
-                        </Pressable>
-                      </View>
-                    ))}
-                  </View>
-                ) : null}
-
-                {sending ? (
-                  <View style={styles.runningBar}>
-                    <Text style={styles.runningText} numberOfLines={1}>
-                      {t("运行中，可引导或排队")}
-                    </Text>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={t("引导")}
-                      accessibilityState={{ disabled: !canSteer }}
-                      disabled={!canSteer}
-                      onPress={() => void handleSteer()}
-                      style={({ pressed }) => [
-                        styles.modeButton,
-                        !canSteer && styles.modeButtonDisabled,
-                        pressed && canSteer && styles.pressed,
-                      ]}
-                    >
-                      <Ionicons
-                        name="git-branch-outline"
-                        size={14}
-                        color={canSteer ? palette.accent : palette.muted}
-                      />
-                      <Text
-                        style={[
-                          styles.modeLabel,
-                          { color: canSteer ? palette.accent : palette.muted },
-                        ]}
-                      >
-                        {t("引导")}
-                      </Text>
-                    </Pressable>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={t("排队")}
-                      accessibilityState={{ disabled: !canQueue }}
-                      disabled={!canQueue}
-                      onPress={queueInput}
-                      style={({ pressed }) => [
-                        styles.modeButton,
-                        !canQueue && styles.modeButtonDisabled,
-                        pressed && canQueue && styles.pressed,
-                      ]}
-                    >
-                      <Ionicons
-                        name="return-down-forward-outline"
-                        size={14}
-                        color={canQueue ? palette.text : palette.muted}
-                      />
-                      <Text
-                        style={[
-                          styles.modeLabel,
-                          { color: canQueue ? palette.text : palette.muted },
-                        ]}
-                      >
-                        {t("排队")}
-                      </Text>
-                    </Pressable>
-                  </View>
-                ) : null}
-
-                <View style={styles.composer}>
-                  <TextInput
-                    value={input}
-                    onChangeText={setInput}
-                    placeholder={
-                      assistantName
-                        ? format("给 {name} 发消息…", { name: assistantName })
-                        : t("输入消息…")
-                    }
-                    placeholderTextColor={palette.muted}
-                    selectionColor={palette.accent}
-                    multiline
-                    maxLength={8_000}
-                    style={styles.composerInput}
-                    editable={!loading && sessionStatus === "online"}
-                  />
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={sending ? t("停止") : t("发送消息")}
-                    accessibilityState={{
-                      disabled: sending ? !activeRunId : !canSend,
-                      busy: sending,
-                    }}
-                    disabled={sending ? !activeRunId : !canSend}
-                    onPress={sending ? () => void handleStop() : handleSend}
-                    style={({ pressed }) => [
-                      sending ? styles.stopButton : styles.sendButton,
-                      (sending ? !activeRunId : !canSend) &&
-                        styles.sendButtonDisabled,
-                      pressed &&
-                        (sending ? Boolean(activeRunId) : canSend) &&
-                        styles.pressed,
-                    ]}
-                  >
-                    {sending ? (
-                      <Ionicons name="stop" size={18} color={palette.onAccent} />
-                    ) : (
-                      <Ionicons name="arrow-up" size={20} color={palette.onAccent} />
-                    )}
-                  </Pressable>
-                </View>
-                <Text style={styles.composerHint}>
-                  {sending
-                    ? t("引导会插入当前执行；排队会在结束后发送")
-                    : t("支持多行输入，点击右侧按钮发送")}
-                </Text>
-              </View>
+              <Composer
+                attachmentUploadPending={attachmentUploading}
+                attachLabel={t("添加附件")}
+                clipboard={clipboardAdapter}
+                disabledInput={loading || sessionStatus !== "online"}
+                disabledInputReason={
+                  sessionStatus === "online"
+                    ? undefined
+                    : t("连接信息缺失或电脑离线，请返回重新连接节点")
+                }
+                draft={input}
+                inputPlaceholder={
+                  assistantName
+                    ? format("给 {name} 发消息…", { name: assistantName })
+                    : t("输入消息…")
+                }
+                maxLength={8_000}
+                onDraftChange={setInput}
+                onEditQueuedMessage={(id, content) => {
+                  setInput(content);
+                  removeQueued(id);
+                }}
+                onPasteAttachment={queueComposerFile}
+                onPickAttachment={pickAttachment}
+                onRemoveAttachment={(id) => {
+                  setPendingAttachments((previous) =>
+                    previous.filter((item) => item.id !== id),
+                  );
+                  setAttachmentPreviews((previous) => {
+                    const next = { ...previous };
+                    delete next[id];
+                    return next;
+                  });
+                }}
+                onRemoveQueuedMessage={removeQueued}
+                onReorderQueuedMessage={reorderQueued}
+                onSend={(mode) => {
+                  if (mode === "steer") void handleSteer();
+                  else if (mode === "queue") queueInput();
+                  else handleSend();
+                }}
+                onStop={() => void handleStop()}
+                pasteLabel={t("粘贴图片或文件")}
+                pendingAttachments={pendingAttachments.map(
+                  (attachment): ComposerAttachment => ({
+                    ...attachment,
+                    kind: attachment.kind === "image" ? "image" : "file",
+                    imageUrl:
+                      attachmentPreviews[attachment.id] ??
+                      attachment.imageUrl ??
+                      null,
+                  }),
+                )}
+                queueDisabled={Boolean(pendingAttachments.length)}
+                queueLabel={t("排队")}
+                queuedLabel={t("排队中")}
+                queuedMessages={queued.map((item) => ({
+                  id: item.id,
+                  input: { content: item.content },
+                }))}
+                removeAttachmentLabel={(name) =>
+                  format("移除附件：{name}", { name })
+                }
+                runningSubmitModes={["steer", "queue"]}
+                sendDisabled={!canSend}
+                sendLabel={t("发送消息")}
+                sending={sending}
+                showStop={Boolean(activeRunId)}
+                steerDisabled={Boolean(pendingAttachments.length)}
+                steerLabel={t("引导")}
+                stopLabel={t("停止")}
+                style={{
+                  paddingBottom: spacing.md,
+                  paddingHorizontal: horizontalPadding,
+                }}
+                theme={agentTheme}
+              />
             </View>
           </View>
         )}
@@ -1441,6 +1776,11 @@ const createStyles = (c: Palette) =>
     messagesContentEmpty: {
       flexGrow: 1,
       justifyContent: "center",
+    },
+    failureWrap: {
+      gap: spacing.sm,
+      marginTop: spacing.sm,
+      marginBottom: spacing.md,
     },
     composerWrap: {
       borderTopWidth: StyleSheet.hairlineWidth,

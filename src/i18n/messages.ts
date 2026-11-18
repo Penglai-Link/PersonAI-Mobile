@@ -339,6 +339,7 @@ export const enMessages: Record<string, string> = {
   "出于安全考虑，PersonAI 只允许通过 HTTPS 连接远程节点。如果这是可信局域网中的调试环境，请在添加节点时显式开启“不安全调试”。":
     "For security, PersonAI only connects to remote nodes over HTTPS. If this is a debugging setup on a trusted LAN, enable Insecure debug when adding the node.",
   "回复失败，请重试": "The reply failed. Try again.",
+  "这次没有生成回复，可以重试": "This turn produced no reply. You can retry it.",
   "回复超时，请稍后重试": "The reply timed out. Try again later.",
   "地址格式不正确，例如 https://192.168.1.10:3000":
     "Invalid address format, for example https://192.168.1.10:3000",
@@ -513,6 +514,13 @@ export const enMessages: Record<string, string> = {
   "下一步": "Next",
   "继续": "Continue",
   "确认": "Confirm",
+  "添加附件": "Attach file",
+  "粘贴图片或文件": "Paste image or file",
+  "移除附件：{name}": "Remove attachment: {name}",
+  "剪贴板里没有可读取的文件": "No readable image or file in the clipboard.",
+  "剪贴板里没有可读取的图片或文件": "No readable image or file in the clipboard.",
+  "正在重新连接，连接成功后会自动上传附件": "Reconnecting; the attachment will upload automatically when the connection is back.",
+  "电脑没有返回有效的附件信息": "The computer did not return valid attachment metadata.",
   "继续中…": "Continuing…",
   "其他": "Other",
   "输入自定义回答": "Type a custom answer",

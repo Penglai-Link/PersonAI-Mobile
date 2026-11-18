@@ -43,6 +43,7 @@ export const TRON_RPC_METHODS = {
   chatProtocolEvents: "tron.chat.protocolEvents",
   chatSteer: "tron.chat.steer",
   chatAnswerUserInput: "tron.chat.answerUserInput",
+  chatUploadAttachment: "tron.chat.uploadAttachment",
   chatUserInputRequests: "tron.chat.userInputRequests",
   chatA2uiState: "tron.chat.a2uiState",
   chatA2uiAction: "tron.chat.a2uiAction",
@@ -300,15 +301,25 @@ function messageListFrom(value: unknown, sessionCode: string): ChatMessage[] {
     .filter((entry): entry is ChatMessage => entry !== null);
 }
 
-function normalizeChatSendResult(value: unknown): ChatSendResult {
+function chatMessagesFrom(value: unknown, sessionCode: string): ChatMessage[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => normalizeSessionMessage(entry, sessionCode))
+    .filter((entry): entry is ChatMessage => entry !== null);
+}
+
+function normalizeChatSendResult(
+  value: unknown,
+  sessionCode: string,
+): ChatSendResult {
   if (!isRecord(value)) return { messages: [] };
   return {
     session: isRecord(value.session)
       ? (value.session as unknown as ChatSession)
       : undefined,
-    messages: Array.isArray(value.messages)
-      ? (value.messages as ChatMessage[])
-      : [],
+    // The run's own messages travel with `RUN_FINISHED`; normalizing them here
+    // means the screen can show a reply even when the history reload misses it.
+    messages: chatMessagesFrom(value.messages, sessionCode),
     run: isRecord(value.run) ? value.run : undefined,
   };
 }
@@ -746,6 +757,69 @@ export async function listChatUserInputRequests(
     .filter((entry): entry is ChatUserInputRequest => entry !== null);
 }
 
+export interface ChatAttachment {
+  id: string;
+  kind: string;
+  title?: string | null;
+  summary: string;
+  imageUrl?: string | null;
+  resourceCode?: string | null;
+  fileName?: string | null;
+  contentType?: string | null;
+  byteSize?: number | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface UploadChatAttachmentParams extends ApiParams {
+  sessionCode: string;
+  fileName: string;
+  contentType?: string | null;
+  dataBase64: string;
+  kind?: "file" | "image" | "inspection";
+  summary?: string;
+}
+
+function normalizeChatAttachment(value: unknown): ChatAttachment | null {
+  if (!isRecord(value)) return null;
+  const id = readString(value, "id");
+  if (!id) return null;
+  return {
+    id,
+    kind: readString(value, "kind") ?? "file",
+    title: readString(value, "title"),
+    summary: readString(value, "summary") ?? id,
+    imageUrl: readString(value, "imageUrl"),
+    resourceCode: readString(value, "resourceCode"),
+    fileName: readString(value, "fileName"),
+    contentType: readString(value, "contentType"),
+    byteSize:
+      typeof value.byteSize === "number" ? value.byteSize : null,
+    metadata: isRecord(value.metadata) ? value.metadata : {},
+  };
+}
+
+/** `tron.chat.uploadAttachment` — stage one pasted/picked file for a message. */
+export async function uploadChatAttachment(
+  params: UploadChatAttachmentParams,
+): Promise<ChatAttachment> {
+  const data = await callTron<unknown>(
+    params,
+    TRON_RPC_METHODS.chatUploadAttachment,
+    scopeParam(params, {
+      sessionCode: params.sessionCode,
+      fileName: params.fileName,
+      contentType: params.contentType ?? "application/octet-stream",
+      dataBase64: params.dataBase64,
+      kind: params.kind ?? "file",
+      summary: params.summary ?? params.fileName,
+    }),
+    180_000,
+  );
+  const attachment = normalizeChatAttachment(data);
+  if (!attachment) throw new Error(translate("电脑没有返回有效的附件信息"));
+  return attachment;
+}
+
 /** Canonical A2UI state used to hydrate native surfaces and actions. */
 export interface ChatA2uiStatePayload {
   sessionId: string;
@@ -875,6 +949,7 @@ export interface StreamChatParams extends ApiParams {
   sessionCode: string;
   workspaceCode?: string;
   content: string;
+  attachments?: unknown[];
   onDelta?: (delta: string) => void;
   /** Every AG-UI event of the run, including tool and reasoning events. */
   onEvent?: (event: AgUiEvent) => void;
@@ -896,6 +971,7 @@ export async function sendChatMessageStream(
     {
       sessionId: params.sessionCode,
       content: params.content,
+      ...(params.attachments?.length ? { attachments: params.attachments } : {}),
       clientCapabilities: { userInputRequests: true },
       metadata: {
         workspaceCode: params.workspaceCode ?? null,
@@ -921,7 +997,7 @@ export async function sendChatMessageStream(
       }
       if (isRunFinished(event)) {
         const finished = event as AgUiEvent & { result?: unknown };
-        result = normalizeChatSendResult(finished.result);
+        result = normalizeChatSendResult(finished.result, params.sessionCode);
       }
     }
   } finally {
