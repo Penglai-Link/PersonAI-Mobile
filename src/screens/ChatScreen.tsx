@@ -514,6 +514,13 @@ export function ChatScreen({ navigation, route }: Props) {
     });
   }, [modelOptionCode, reasoningEffort, sessionCode]);
 
+  // Catalog refreshes can drop a level after it was remembered; never send it.
+  useEffect(() => {
+    if (reasoningEffort === null) return;
+    const supported = selectedModelOption?.supportedReasoningEfforts ?? [];
+    if (!supported.includes(reasoningEffort)) setReasoningEffort(null);
+  }, [reasoningEffort, selectedModelOption]);
+
   const handleSelectModel = useCallback((option: ModelSelectOption) => {
     setModelOptionCode(option.optionCode);
     setReasoningEffort(null);

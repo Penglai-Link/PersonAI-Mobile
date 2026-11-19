@@ -135,8 +135,8 @@ export function ModelEffortSelector({
         (value) => REASONING_EFFORTS.includes(value),
       );
       // Exactly the desktop rule: only the stages the selected model publishes
-      // are offered. Provider chat models publish none, so the panel shows just
-      // the model list there.
+      // are offered. PersonAI publishes 自动/低/高/最大; models without
+      // published stages show just the model list.
       if (!supported.length) return [];
       const ordered = REASONING_EFFORTS.filter((value) =>
         supported.includes(value),
@@ -211,8 +211,8 @@ export function ModelEffortSelector({
   const openPanel = () => {
     if (disabled) return;
     setQuery("");
-    // Like the desktop, a model without efforts opens straight into the list.
-    setModelsOpen(!hasEffort);
+    // The model list stays collapsed until the user asks for it.
+    setModelsOpen(false);
     setOpen(true);
   };
 
@@ -239,9 +239,6 @@ export function ModelEffortSelector({
           pressed && styles.pressed,
         ]}
       >
-        <View style={styles.intelligenceDot}>
-          <View style={styles.intelligenceDotCore} />
-        </View>
         <Text style={styles.triggerLabel} numberOfLines={1}>
           {selectedLabel}
         </Text>
@@ -471,20 +468,6 @@ const createStyles = (c: Palette) =>
     },
     triggerDisabled: {
       opacity: 0.5,
-    },
-    intelligenceDot: {
-      width: 10,
-      height: 10,
-      borderRadius: 5,
-      alignItems: "center",
-      justifyContent: "center",
-      backgroundColor: c.accent,
-    },
-    intelligenceDotCore: {
-      width: 3,
-      height: 3,
-      borderRadius: 1.5,
-      backgroundColor: c.onAccent,
     },
     triggerLabel: {
       flexShrink: 1,
