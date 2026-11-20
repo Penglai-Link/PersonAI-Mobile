@@ -14,7 +14,6 @@ import {
 
 import {
   ASSISTANT_SOURCE_TYPE,
-  createChatSession,
   createAssistantSession,
   createMainAssistantSession,
   listDirectories,
@@ -57,6 +56,7 @@ import {
   useThemedStyles,
   type Palette,
 } from "../theme";
+import { createDraftCode } from "../utils/draft";
 import { describeError, formatRelativeTime, parseTimestamp } from "../utils/format";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Home">;
@@ -110,7 +110,6 @@ export function HomeScreen({ navigation }: Props) {
   const [refreshing, setRefreshing] = useState(false);
   const [contentLoading, setContentLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
   const [openingAssistantCode, setOpeningAssistantCode] = useState<
     string | null
   >(null);
@@ -435,6 +434,7 @@ export function HomeScreen({ navigation }: Props) {
         : undefined;
       navigation.push("Chat", {
         session,
+        draft: undefined,
         workspaceCode,
         assistantCode: isAssistantSession
           ? (matchingAssistant?.assistantCode ?? session.sourceCode ?? null)
@@ -483,6 +483,7 @@ export function HomeScreen({ navigation }: Props) {
         }
         navigation.push("Chat", {
           session,
+          draft: undefined,
           workspaceCode,
           assistantCode: assistant.assistantCode,
           assistantName: assistant.name,
@@ -504,8 +505,8 @@ export function HomeScreen({ navigation }: Props) {
     ],
   );
 
-  const createChat = useCallback(async () => {
-    if (creating || sessionStatus !== "online") return;
+  const createChat = useCallback(() => {
+    if (sessionStatus !== "online") return;
     // Resolve the workspace at press time. `selectedWorkspaceCode` can be
     // briefly unset while a refresh is in flight; the loaded list is the
     // source of truth, and an empty result must never be sent to the node.
@@ -522,28 +523,18 @@ export function HomeScreen({ navigation }: Props) {
       selectedWorkspaceRef.current = workspaceCode;
       setSelectedWorkspaceCode(workspaceCode);
     }
-    setCreating(true);
     setError(null);
-    try {
-      const session = await sessionRequest(({ tunnel }) =>
-        createChatSession({ tunnel, workspaceCode }),
-      );
-      navigation.push("Chat", {
-        session,
-        workspaceCode: session.workspaceCode ?? workspaceCode,
-        assistantCode: null,
-        assistantName: null,
-      });
-    } catch (createError) {
-      if (focusedRef.current) setError(describeError(createError));
-    } finally {
-      setCreating(false);
-    }
+    // Opening a draft is local-only; the node creates the session on the first
+    // message, so an abandoned `+` leaves no empty session behind.
+    navigation.push("Chat", {
+      draft: { draftCode: createDraftCode(), workspaceCode },
+      workspaceCode,
+      assistantCode: null,
+      assistantName: null,
+    });
   }, [
     activeWorkspaces,
-    creating,
     navigation,
-    sessionRequest,
     sessionStatus,
     t,
     workspaces,
@@ -559,7 +550,6 @@ export function HomeScreen({ navigation }: Props) {
         activeWorkspaces[0]?.workspaceCode ??
         workspaces[0]?.workspaceCode,
     ) &&
-    !creating &&
     !loading &&
     sessionStatus === "online";
 
@@ -1075,20 +1065,16 @@ export function HomeScreen({ navigation }: Props) {
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={t("新建随聊")}
-        accessibilityState={{ disabled: !canCreate, busy: creating }}
+        accessibilityState={{ disabled: !canCreate }}
         disabled={!canCreate}
-        onPress={() => void createChat()}
+        onPress={() => createChat()}
         style={({ pressed }) => [
           styles.fab,
           !canCreate && styles.fabDisabled,
           pressed && styles.fabPressed,
         ]}
       >
-        {creating ? (
-          <ActivityIndicator size="small" color={palette.onAccent} />
-        ) : (
-          <Ionicons name="add" size={28} color={palette.onAccent} />
-        )}
+        <Ionicons name="add" size={28} color={palette.onAccent} />
       </Pressable>
     </Screen>
   );

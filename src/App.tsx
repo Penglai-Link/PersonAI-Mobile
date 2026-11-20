@@ -14,7 +14,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ASSISTANT_SOURCE_TYPE, type ChatSession } from "./api/tron";
 import { LanguageProvider } from "./i18n";
 import { AppDrawer, DrawerProvider, useDrawer } from "./navigation/Drawer";
-import type { RootStackParamList } from "./navigation/types";
+import type { ChatDraft, RootStackParamList } from "./navigation/types";
 import { AddNodeScreen } from "./screens/AddNodeScreen";
 import { DashboardScreen } from "./screens/DashboardScreen";
 import { ChatScreen } from "./screens/ChatScreen";
@@ -29,6 +29,7 @@ import {
 import { NodeLatencyProvider } from "./store/nodeLatency";
 import { NodeSessionProvider } from "./store/nodeSession";
 import { ThemeProvider, useTheme } from "./theme";
+import { createDraftCode } from "./utils/draft";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -119,9 +120,40 @@ function AppNavigator() {
         (session.sourceType ?? "").toUpperCase() === ASSISTANT_SOURCE_TYPE;
       navigationRef.navigate("Chat", {
         session,
+        draft: undefined,
         workspaceCode: workspaceCode || session.workspaceCode || "",
         workspaceLabel,
         assistantCode: isAssistant ? (session.sourceCode ?? null) : null,
+        assistantName: null,
+      });
+    },
+    [closeDrawer, navigationRef, selectNode],
+  );
+
+  /**
+   * Opens a local draft without touching the node: no real session exists until
+   * the chat sends its first message, so tapping `+` repeatedly stays free.
+   */
+  const openDraftFromDrawer = useCallback(
+    (
+      node: SavedNode,
+      workspaceCode: string,
+      workspaceLabel: string | null,
+      context?: Pick<ChatDraft, "projectCode" | "directoryCode">,
+    ) => {
+      closeDrawer();
+      selectNode(node);
+      if (!navigationRef.isReady()) return;
+      navigationRef.navigate("Chat", {
+        draft: {
+          ...context,
+          draftCode: createDraftCode(),
+          workspaceCode,
+        },
+        session: undefined,
+        workspaceCode,
+        workspaceLabel,
+        assistantCode: null,
         assistantName: null,
       });
     },
@@ -165,6 +197,7 @@ function AppNavigator() {
         onOpenDashboard={openDashboard}
         onOpenSettings={openSettings}
         onScan={openScanner}
+        onOpenDraft={openDraftFromDrawer}
         onOpenSession={openSessionFromDrawer}
       />
     </View>

@@ -9,7 +9,6 @@ import {
 
 import {
   TRON_PRODUCT_CODE,
-  createChatSession,
   type ChatSession,
   type NavigationMenu,
 } from "../api/tron";
@@ -37,6 +36,7 @@ import {
   loadNodeOverview,
   type NodeOverview,
 } from "../utils/nodeOverview";
+import type { ChatDraft } from "./types";
 
 interface DrawerTreeProps {
   /** Refresh expanded nodes whenever the drawer is opened. */
@@ -46,6 +46,16 @@ interface DrawerTreeProps {
     session: ChatSession,
     workspaceCode: string,
     workspaceLabel: string | null,
+  ) => void;
+  /**
+   * Opens a local draft for the tapped group. No session exists until the
+   * chat's first message is sent, matching Tron's draft tabs.
+   */
+  onOpenDraft: (
+    node: SavedNode,
+    workspaceCode: string,
+    workspaceLabel: string | null,
+    context?: Pick<ChatDraft, "projectCode" | "directoryCode">,
   ) => void;
 }
 
@@ -207,7 +217,11 @@ function buildNodeWorkspaces(
   }));
 }
 
-export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
+export function DrawerTree({
+  active,
+  onOpenSession,
+  onOpenDraft,
+}: DrawerTreeProps) {
   const { palette } = useTheme();
   const styles = useThemedStyles(createStyles);
   const { t, format } = useI18n();
@@ -229,15 +243,7 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
   const [nodeStates, setNodeStates] = useState<Record<string, NodeTreeState>>(
     {},
   );
-  /** `${nodeId}:${workspaceCode}:${groupKey}` of the group creating a session. */
-  const [creatingKey, setCreatingKey] = useState<string | null>(null);
-  const [createError, setCreateError] = useState<{
-    nodeId: string;
-    message: string;
-  } | null>(null);
   const wasActiveRef = useRef(false);
-  /** Guards double taps before `creatingKey` reaches the next render. */
-  const creatingRef = useRef(false);
 
   // Session metadata is memory-only conversation content: drop it when the
   // active node changes, the app backgrounds, or a node goes offline.
@@ -246,7 +252,6 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
     setNodeStates({});
     setExpandedWorkspaces({});
     setExpandedGroups({});
-    setCreateError(null);
   }, [contentEpoch]);
 
   const productsWithNodes = useMemo(
@@ -286,10 +291,6 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
 
   const loadNode = useCallback(
     async (node: SavedNode) => {
-      // A fresh read supersedes any failed create shown under this node.
-      setCreateError((previous) =>
-        previous?.nodeId === node.id ? null : previous,
-      );
       setNodeStates((previous) => ({
         ...previous,
         [node.id]: { status: "loading" },
@@ -320,52 +321,19 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
   );
 
   /**
-   * Starts a plain session on a specific node without switching the active
-   * node first: `requestForNode` shares the node's tunnel, so the session is
-   * created against the node the user tapped even when another node is active.
-   * `onOpenSession` then selects that node and opens the new session.
+   * Opens a local draft on the tapped node. The node stays untouched until the
+   * chat's first send, exactly like Tron's draft tab, so tapping `+` repeatedly
+   * never leaves empty sessions behind.
    */
-  const createSession = useCallback(
-    async (
+  const openDraft = useCallback(
+    (
       node: SavedNode,
       workspace: TreeWorkspace,
-      groupKey: string,
       context: { projectCode?: string; directoryCode?: string } = {},
     ) => {
-      if (creatingRef.current) return;
-      creatingRef.current = true;
-      setCreatingKey(`${node.id}:${workspace.workspaceCode}:${groupKey}`);
-      setCreateError(null);
-      try {
-        // The new session belongs to the workspace whose group was tapped, so
-        // the node files it exactly where the drawer will list it again.
-        const targetWorkspaceCode = workspace.workspaceCode;
-        // Topic/directory groups keep their context, so the session lands in
-        // that group instead of appearing as an unattached 随聊 session.
-        const session = await requestForNode(node, ({ tunnel }) =>
-          createChatSession({
-            tunnel,
-            workspaceCode: targetWorkspaceCode,
-            ...(context.projectCode ? { projectCode: context.projectCode } : {}),
-            ...(context.directoryCode
-              ? { directoryCode: context.directoryCode }
-              : {}),
-          }),
-        );
-        onOpenSession(
-          node,
-          session,
-          session.workspaceCode ?? targetWorkspaceCode,
-          workspace.label,
-        );
-      } catch (error) {
-        setCreateError({ nodeId: node.id, message: describeError(error) });
-      } finally {
-        creatingRef.current = false;
-        setCreatingKey(null);
-      }
+      onOpenDraft(node, workspace.workspaceCode, workspace.label, context);
     },
-    [onOpenSession, requestForNode],
+    [onOpenDraft],
   );
 
   useEffect(() => {
@@ -469,8 +437,6 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
             ? productNodes.map((node) => {
                 const nodeOpen = Boolean(expandedNodes[node.id]);
                 const state = nodeStates[node.id];
-                const createFailure =
-                  createError?.nodeId === node.id ? createError.message : null;
 
                 const renderSession = (item: TreeSession) => (
                   <Pressable
@@ -519,8 +485,6 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
                 ) => {
                   const subgroupId = `${node.id}:${workspace.workspaceCode}:${group.key}:${subgroup.key}`;
                   const open = expandedGroups[subgroupId] === true;
-                  const createKey = `${subgroupId}`;
-                  const creating = creatingKey === createKey;
                   return (
                     <View key={subgroup.key}>
                       <View style={styles.subgroupHeader}>
@@ -569,31 +533,19 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
                             "在 {name} 新建会话",
                             { name: subgroup.label },
                           )}
-                          accessibilityState={{
-                            busy: creating,
-                            disabled: creatingKey !== null,
-                          }}
-                          disabled={creatingKey !== null}
                           hitSlop={8}
                           onPress={() =>
-                            void createSession(node, workspace, createKey, {
+                            openDraft(node, workspace, {
                               projectCode: subgroup.projectCode,
                               directoryCode: subgroup.directoryCode,
                             })
                           }
                           style={({ pressed }) => [
                             styles.groupCreate,
-                            creatingKey !== null &&
-                              !creating &&
-                              styles.groupCreateDisabled,
                             pressed && styles.pressed,
                           ]}
                         >
-                          {creating ? (
-                            <ActivityIndicator size="small" color={palette.accent} />
-                          ) : (
-                            <Ionicons name="add" size={14} color={palette.muted} />
-                          )}
+                          <Ionicons name="add" size={14} color={palette.muted} />
                         </Pressable>
                       </View>
                       {open ? (
@@ -625,9 +577,6 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
                       (total, subgroup) => total + subgroup.sessions.length,
                       0,
                     );
-                  const createKey = `${node.id}:${workspace.workspaceCode}:${group.key}`;
-                  const creating = creatingKey === createKey;
-                  const createDisabled = creatingKey !== null || group.unsupported;
                   return (
                     <View key={group.key}>
                       <View style={styles.groupHeader}>
@@ -674,24 +623,14 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
                               "在 {workspace} 的 {group} 新建会话",
                               { workspace: workspace.label, group: group.label },
                             )}
-                            accessibilityState={{
-                              busy: creating,
-                              disabled: createDisabled,
-                            }}
-                            disabled={createDisabled}
                             hitSlop={6}
-                            onPress={() => void createSession(node, workspace, group.key)}
+                            onPress={() => openDraft(node, workspace)}
                             style={({ pressed }) => [
                               styles.groupCreate,
-                              createDisabled && !creating && styles.groupCreateDisabled,
                               pressed && styles.pressed,
                             ]}
                           >
-                            {creating ? (
-                              <ActivityIndicator size="small" color={palette.accent} />
-                            ) : (
-                              <Ionicons name="add" size={14} color={palette.muted} />
-                            )}
+                            <Ionicons name="add" size={14} color={palette.muted} />
                           </Pressable>
                         )}
                       </View>
@@ -740,10 +679,6 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
                     workspace.groups[0]?.pageCode === "sessions"
                       ? workspace.groups[0]
                       : null;
-                  const flatKey = flatGroup
-                    ? `${node.id}:${workspace.workspaceCode}:${flatGroup.key}`
-                    : null;
-                  const flatCreating = flatKey !== null && creatingKey === flatKey;
 
                   return (
                     <View key={workspace.workspaceCode}>
@@ -792,28 +727,14 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
                             "在 {workspace} 新建会话",
                             { workspace: workspace.label },
                           )}
-                          accessibilityState={{
-                            busy: flatCreating,
-                            disabled: creatingKey !== null,
-                          }}
-                          disabled={creatingKey !== null}
                           hitSlop={6}
-                          onPress={() =>
-                            void createSession(node, workspace, flatGroup.key)
-                          }
+                          onPress={() => openDraft(node, workspace)}
                           style={({ pressed }) => [
                             styles.groupCreate,
-                            creatingKey !== null &&
-                              !flatCreating &&
-                              styles.groupCreateDisabled,
                             pressed && styles.pressed,
                           ]}
                         >
-                          {flatCreating ? (
-                            <ActivityIndicator size="small" color={palette.muted} />
-                          ) : (
-                            <Ionicons name="add" size={14} color={palette.muted} />
-                          )}
+                          <Ionicons name="add" size={14} color={palette.muted} />
                         </Pressable>
                       ) : null}
                       </View>
@@ -876,16 +797,6 @@ export function DrawerTree({ active, onOpenSession }: DrawerTreeProps) {
                         )}
                       </Pressable>
                     </View>
-
-                    {createFailure &&
-                      (state?.status !== "error" ||
-                        state.message !== createFailure) ? (
-                      <View style={styles.createErrorRow}>
-                        <Text style={styles.errorText} numberOfLines={3}>
-                          {createFailure}
-                        </Text>
-                      </View>
-                    ) : null}
 
                     {nodeOpen ? (
                       <View style={styles.nodeBody}>
@@ -995,15 +906,6 @@ const createStyles = (c: Palette) =>
       borderRadius: 6,
       alignItems: "center",
       justifyContent: "center",
-    },
-    groupCreateDisabled: {
-      opacity: 0.4,
-    },
-    createErrorRow: {
-      marginLeft: spacing.xl + spacing.sm,
-      marginRight: spacing.sm,
-      paddingVertical: spacing.xs,
-      gap: 4,
     },
     nodeText: {
       flex: 1,

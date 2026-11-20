@@ -27,6 +27,7 @@ import {
   useThemedStyles,
   type Palette,
 } from "../theme";
+import { EffortSlider } from "./EffortSlider";
 import { Ionicons } from "./icons";
 
 export interface ModelEffortSelectorLabels {
@@ -158,6 +159,7 @@ export function ModelEffortSelector({
     steps.findIndex((step) => step.value === effort),
   );
   const effortLabel = hasEffort ? steps[effortIndex]?.label ?? labels.automatic : null;
+  const stepLabels = useMemo(() => steps.map((step) => step.label), [steps]);
 
   const filtered = useMemo(
     () =>
@@ -291,36 +293,12 @@ export function ModelEffortSelector({
               <View style={styles.effortBlock}>
                 <Text style={styles.sectionLabel}>{labels.effortLabel}</Text>
                 <Text style={styles.effortValue}>{effortLabel}</Text>
-                <View style={styles.track}>
-                  {steps.map((step, index) => {
-                    const active = index <= effortIndex;
-                    return (
-                      <Pressable
-                        key={`${step.value ?? "auto"}`}
-                        accessibilityRole="radio"
-                        accessibilityState={{ selected: index === effortIndex }}
-                        accessibilityLabel={step.label}
-                        onPress={() => onSelectEffort(step.value)}
-                        style={styles.trackStep}
-                      >
-                        <View
-                          style={[
-                            styles.trackLine,
-                            index === 0 && styles.trackLineHidden,
-                            active && styles.trackLineActive,
-                          ]}
-                        />
-                        <View
-                          style={[
-                            styles.trackDot,
-                            active && styles.trackDotActive,
-                            index === effortIndex && styles.trackDotCurrent,
-                          ]}
-                        />
-                      </Pressable>
-                    );
-                  })}
-                </View>
+                <EffortSlider
+                  label={labels.effortLabel}
+                  onChange={(index) => onSelectEffort(steps[index]?.value ?? null)}
+                  steps={stepLabels}
+                  value={effortIndex}
+                />
                 <View style={styles.trackLabels}>
                   <Text style={styles.trackLabel}>{labels.faster}</Text>
                   <Text style={styles.trackLabel}>{labels.deeper}</Text>
@@ -544,54 +522,10 @@ const createStyles = (c: Palette) =>
       ...typography.bodyStrong,
       fontSize: 20,
     },
-    track: {
-      flexDirection: "row",
-      alignItems: "center",
-      marginTop: spacing.sm,
-    },
-    trackStep: {
-      flex: 1,
-      height: 28,
-      justifyContent: "center",
-    },
-    trackLine: {
-      position: "absolute",
-      left: 0,
-      right: 0,
-      top: 13,
-      height: 2,
-      backgroundColor: c.border,
-    },
-    trackLineHidden: {
-      backgroundColor: "transparent",
-    },
-    trackLineActive: {
-      backgroundColor: c.accent,
-    },
-    trackDot: {
-      alignSelf: "center",
-      width: 10,
-      height: 10,
-      borderRadius: 5,
-      borderWidth: 2,
-      borderColor: c.border,
-      backgroundColor: c.background,
-    },
-    trackDotActive: {
-      borderColor: c.accent,
-      backgroundColor: c.accent,
-    },
-    trackDotCurrent: {
-      width: 16,
-      height: 16,
-      borderRadius: 8,
-      borderWidth: 3,
-      borderColor: c.background,
-      backgroundColor: c.accent,
-    },
     trackLabels: {
       flexDirection: "row",
       justifyContent: "space-between",
+      marginTop: 2,
     },
     trackLabel: {
       color: c.muted,

@@ -19,6 +19,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import {
   ASSISTANT_SOURCE_TYPE,
+  createChatSession,
   defaultModelOption,
   listAssistants,
   listChatMessages,
@@ -37,6 +38,7 @@ import {
   uploadChatAttachment,
   type ChatAttachment,
   type ChatMessage,
+  type ChatSession,
   type DirectoryRecord,
   type ModelSelectOption,
   type ReasoningEffort,
@@ -310,14 +312,21 @@ export function ChatScreen({ navigation, route }: Props) {
     assistantBubbleColor: palette.surface,
   };
 
-  const { session } = route.params;
-  const sessionCode = session.sessionCode;
+  const { session, draft } = route.params;
+  const sessionCode = session?.sessionCode ?? "";
+  const draftCode = draft?.draftCode ?? "";
+  /** Drafts are local navigation state until their first message is sent. */
+  const isDraft = !session;
+  /** Stable id for the conversation on screen; survives draft promotion. */
+  const conversationKey = sessionCode || draftCode || "chat";
+  /** Model choices belong to the draft/session the user is composing in. */
+  const modelKey = sessionCode || draftCode;
   const workspaceCode =
-    route.params.workspaceCode || session.workspaceCode || "";
+    route.params.workspaceCode || session?.workspaceCode || draft?.workspaceCode || "";
   const effectiveAssistantCode =
     route.params.assistantCode ??
-    ((session.sourceType ?? "").toUpperCase() === ASSISTANT_SOURCE_TYPE
-      ? (session.sourceCode ?? null)
+    ((session?.sourceType ?? "").toUpperCase() === ASSISTANT_SOURCE_TYPE
+      ? (session?.sourceCode ?? null)
       : null);
   const [resolvedAssistantName, setResolvedAssistantName] = useState<
     string | null
@@ -328,14 +337,16 @@ export function ChatScreen({ navigation, route }: Props) {
   // (`main-dude · Interactive`); the name is what belongs in the header.
   const title = assistantChat
     ? assistantName?.trim() || t("个人助手")
-    : session.title?.trim() ||
+    : session?.title?.trim() ||
       (assistantName
         ? format("与 {name} 的会话", { name: assistantName })
         : t("新会话"));
   const nodeLabel = currentNode?.name?.trim() || t("节点");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => Boolean(session));
   const [sending, setSending] = useState(false);
+  /** True while the first message of a draft is creating its session. */
+  const [creatingSession, setCreatingSession] = useState(false);
   const [input, setInput] = useState("");
   const [streamText, setStreamText] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -358,7 +369,12 @@ export function ChatScreen({ navigation, route }: Props) {
   );
   const [workingDirectoryCode, setWorkingDirectoryCode] = useState<
     string | null
-  >(session.workingDirectoryCode ?? session.directoryCode ?? null);
+  >(
+    session?.workingDirectoryCode ??
+      session?.directoryCode ??
+      draft?.directoryCode ??
+      null,
+  );
   const [workspaceDirectories, setWorkspaceDirectories] = useState<
     DirectoryRecord[]
   >([]);
@@ -367,10 +383,10 @@ export function ChatScreen({ navigation, route }: Props) {
   const [modelOptions, setModelOptions] = useState<ModelSelectOption[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelOptionCode, setModelOptionCode] = useState<string>(
-    () => sessionModelChoices.get(sessionCode)?.optionCode ?? "",
+    () => sessionModelChoices.get(modelKey)?.optionCode ?? "",
   );
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | null>(
-    () => sessionModelChoices.get(sessionCode)?.effort ?? null,
+    () => sessionModelChoices.get(modelKey)?.effort ?? null,
   );
   const [pendingRequests, setPendingRequests] = useState<ChatUserInputRequest[]>([]);
   const [answeredRequests, setAnsweredRequests] = useState<ChatUserInputRequest[]>([]);
@@ -382,6 +398,12 @@ export function ChatScreen({ navigation, route }: Props) {
   const streamControllerRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
   const activeSessionRef = useRef(sessionCode);
+  /** Latest real session code; promotion must be visible inside one async send. */
+  const sessionCodeRef = useRef(sessionCode);
+  /** Guards a second send before the draft's session exists. */
+  const creatingSessionRef = useRef(false);
+  /** Attachments staged locally until the draft's session exists. */
+  const draftFilesRef = useRef(new Map<string, ComposerClipboardFile>());
   const sendingRef = useRef(false);
   const sessionStatusRef = useRef(sessionStatus);
   const liveTraceRef = useRef<RunTrace | null>(null);
@@ -389,6 +411,10 @@ export function ChatScreen({ navigation, route }: Props) {
   const runEventsRef = useRef<AgUiEvent[]>([]);
   /** What the message list was last reset for; status flips must not reset it. */
   const resetKeyRef = useRef<string>("");
+  /** A draft becoming a session is not a conversation switch. */
+  const promotedSessionRef = useRef(false);
+  /** Bumped when the screen switches conversation, so a slow send can bail. */
+  const conversationGenerationRef = useRef(0);
   /** Guards the one reload per online transition. */
   const onlineLoadedRef = useRef(false);
   const queuedRef = useRef<QueuedChatMessage[]>([]);
@@ -504,15 +530,16 @@ export function ChatScreen({ navigation, route }: Props) {
 
   // The effort belongs to the model: picking another model resets it to 自动.
   useEffect(() => {
-    setReasoningEffort(sessionModelChoices.get(sessionCode)?.effort ?? null);
-  }, [sessionCode]);
+    setReasoningEffort(sessionModelChoices.get(modelKey)?.effort ?? null);
+  }, [modelKey]);
 
   useEffect(() => {
-    sessionModelChoices.set(sessionCode, {
+    if (!modelKey) return;
+    sessionModelChoices.set(modelKey, {
       optionCode: modelOptionCode,
       effort: reasoningEffort,
     });
-  }, [modelOptionCode, reasoningEffort, sessionCode]);
+  }, [modelKey, modelOptionCode, reasoningEffort]);
 
   // Catalog refreshes can drop a level after it was remembered; never send it.
   useEffect(() => {
@@ -584,6 +611,7 @@ export function ChatScreen({ navigation, route }: Props) {
   }, [sessionStatus]);
 
   useEffect(() => {
+    sessionCodeRef.current = sessionCode;
     activeSessionRef.current = sessionCode;
   }, [sessionCode]);
 
@@ -597,12 +625,15 @@ export function ChatScreen({ navigation, route }: Props) {
 
   const refreshProtocolEvents = useCallback(
     (sequence: number) => {
-      if (!workspaceCode || sessionStatus !== "online") return;
+      const targetSessionCode = sessionCodeRef.current;
+      if (!targetSessionCode || !workspaceCode || sessionStatus !== "online") {
+        return;
+      }
       void sessionRequest(
         ({ tunnel }) =>
           listChatProtocolEvents({
             tunnel,
-            sessionCode,
+            sessionCode: targetSessionCode,
             workspaceCode,
             assistantCode: effectiveAssistantCode,
           }),
@@ -648,7 +679,7 @@ export function ChatScreen({ navigation, route }: Props) {
             );
             const requests = nativeUserInputRequests(
               events as Parameters<typeof nativeUserInputRequests>[0],
-              sessionCode,
+              targetSessionCode,
             ).filter(
               (request) => !answeredRequestIdsRef.current.has(request.requestId),
             );
@@ -663,13 +694,16 @@ export function ChatScreen({ navigation, route }: Props) {
   );
 
   const refreshA2uiState = useCallback(async () => {
-    if (!workspaceCode || sessionStatus !== "online") return;
+    const targetSessionCode = sessionCodeRef.current;
+    if (!targetSessionCode || !workspaceCode || sessionStatus !== "online") {
+      return;
+    }
     try {
       const state = await sessionRequest(
         ({ tunnel }) =>
           getChatA2uiState({
             tunnel,
-            sessionCode,
+            sessionCode: targetSessionCode,
             workspaceCode,
             assistantCode: effectiveAssistantCode,
           }),
@@ -718,12 +752,17 @@ export function ChatScreen({ navigation, route }: Props) {
   );
 
   const uploadComposerFile = useCallback(
-    async (file: ComposerClipboardFile, tempId?: string) => {
-      if (!workspaceCode || sessionStatus !== "online") {
+    async (
+      file: ComposerClipboardFile,
+      tempId?: string,
+    ): Promise<ChatAttachment | null> => {
+      // Read the ref, not the render value: a draft uploads right after the
+      // first send created the session, before this callback is re-created.
+      const targetSessionCode = sessionCodeRef.current;
+      if (!targetSessionCode || !workspaceCode || sessionStatus !== "online") {
         setError(t("连接信息缺失或电脑离线，请返回重新连接节点"));
-        return;
+        return null;
       }
-      if (attachmentUploading) return;
       setAttachmentUploading(true);
       try {
         const prepared = await prepareImageFile(file);
@@ -736,7 +775,7 @@ export function ChatScreen({ navigation, route }: Props) {
           ({ tunnel }) =>
             uploadChatAttachment({
               tunnel,
-              sessionCode,
+              sessionCode: targetSessionCode,
               workspaceCode,
               assistantCode: effectiveAssistantCode,
               fileName:
@@ -748,7 +787,7 @@ export function ChatScreen({ navigation, route }: Props) {
             }),
           { retry: false },
         );
-        if (!mountedRef.current) return;
+        if (!mountedRef.current) return attachment;
         setPendingAttachments((previous) =>
           tempId
             ? previous.map((item) => (item.id === tempId ? attachment : item))
@@ -767,11 +806,14 @@ export function ChatScreen({ navigation, route }: Props) {
             return next;
           });
         }
+        return attachment;
       } catch (uploadError) {
         if (mountedRef.current && !isAbortError(uploadError)) {
           setError(describeError(uploadError));
         }
-        if (tempId && mountedRef.current) {
+        // A staged draft file stays in the composer after a failed upload so
+        // retrying the send retries that file instead of losing it.
+        if (tempId && mountedRef.current && !draftFilesRef.current.has(tempId)) {
           setPendingAttachments((previous) =>
             previous.filter((item) => item.id !== tempId),
           );
@@ -781,14 +823,13 @@ export function ChatScreen({ navigation, route }: Props) {
             return next;
           });
         }
+        return null;
       } finally {
         if (mountedRef.current) setAttachmentUploading(false);
       }
     },
     [
-      attachmentUploading,
       effectiveAssistantCode,
-      sessionCode,
       sessionRequest,
       sessionStatus,
       t,
@@ -822,6 +863,12 @@ export function ChatScreen({ navigation, route }: Props) {
           [tempId]: preview,
         }));
       }
+      // Drafts have no session to own an upload yet; stage the file locally and
+      // upload it right after the first send creates the session.
+      if (isDraft) {
+        draftFilesRef.current.set(tempId, file);
+        return;
+      }
       pendingUploadFile = { id: tempId, file };
       if (sessionStatus === "online") {
         pendingUploadFile = null;
@@ -830,7 +877,7 @@ export function ChatScreen({ navigation, route }: Props) {
         setNotice(t("正在重新连接，连接成功后会自动上传附件"));
       }
     },
-    [sessionStatus, t, uploadComposerFile],
+    [isDraft, sessionStatus, t, uploadComposerFile],
   );
 
   useEffect(() => {
@@ -858,7 +905,9 @@ export function ChatScreen({ navigation, route }: Props) {
 
   const loadMessages = useCallback(
     async (showSpinner: boolean) => {
-      if (!workspaceCode || sessionStatus !== "online") {
+      const targetSessionCode = sessionCodeRef.current;
+      // A draft has no server session to read until its first message.
+      if (!targetSessionCode || !workspaceCode || sessionStatus !== "online") {
         setLoading(false);
         return;
       }
@@ -869,7 +918,7 @@ export function ChatScreen({ navigation, route }: Props) {
           sessionRequest(({ tunnel }) =>
             listChatMessages({
               tunnel,
-              sessionCode,
+              sessionCode: targetSessionCode,
               workspaceCode,
               assistantCode: effectiveAssistantCode,
             }),
@@ -878,7 +927,7 @@ export function ChatScreen({ navigation, route }: Props) {
             ({ tunnel }) =>
               listChatUserInputRequests({
                 tunnel,
-                sessionCode,
+                sessionCode: targetSessionCode,
                 workspaceCode,
                 assistantCode: effectiveAssistantCode,
               }),
@@ -925,16 +974,27 @@ export function ChatScreen({ navigation, route }: Props) {
   // in-memory list. A connectivity flip (online -> reconnecting -> online) must
   // never wipe what is already on screen.
   useEffect(() => {
-    const resetKey = `${contentEpoch}|${sessionCode}`;
+    // A draft keeps its identity on `draftCode`; promoting it to a real session
+    // must not wipe the transcript, input, or attachments on screen.
+    const resetKey = `${contentEpoch}|${conversationKey}`;
     if (resetKeyRef.current === resetKey) return;
+    if (promotedSessionRef.current) {
+      promotedSessionRef.current = false;
+      resetKeyRef.current = resetKey;
+      return;
+    }
     resetKeyRef.current = resetKey;
+    conversationGenerationRef.current += 1;
     onlineLoadedRef.current = false;
     streamControllerRef.current?.abort();
     streamControllerRef.current = null;
     messagesSeqRef.current += 1;
     sendingRef.current = false;
     setSending(false);
+    setCreatingSession(false);
+    creatingSessionRef.current = false;
     setMessages([]);
+    setInput("");
     setStreamText("");
     setError(null);
     setNotice(null);
@@ -949,29 +1009,40 @@ export function ChatScreen({ navigation, route }: Props) {
     setQueued([]);
     setPendingAttachments([]);
     setAttachmentPreviews({});
+    draftFilesRef.current.clear();
+    // The one-slot offline upload belongs to the conversation being left.
+    pendingUploadFile = null;
     setPendingRequests([]);
     setAnsweredRequests([]);
     setAnswering(false);
     answeredRequestIdsRef.current = new Set();
     a2uiBusyRef.current = false;
-    // Model choice belongs to the session that recorded it.
-    const remembered = sessionModelChoices.get(sessionCode);
+    // Model choice belongs to the session (or draft) that recorded it.
+    const remembered = sessionModelChoices.get(modelKey);
     setModelOptionCode(remembered?.optionCode ?? "");
     setReasoningEffort(remembered?.effort ?? null);
     setWorkspaceLabel(route.params.workspaceLabel ?? null);
     setWorkingDirectoryCode(
-      route.params.session.workingDirectoryCode ??
-        route.params.session.directoryCode ??
+      route.params.session?.workingDirectoryCode ??
+        route.params.session?.directoryCode ??
+        route.params.draft?.directoryCode ??
         null,
     );
     setWorkspaceDirectories([]);
     setDirectoriesFailed(false);
     setA2uiRevision((value) => value + 1);
-    setLoading(sessionStatus !== "offline");
+    // A reset to another draft has no session; keep the refs truthful so an
+    // in-flight first send of the previous draft can detect the switch.
+    sessionCodeRef.current = route.params.session?.sessionCode ?? "";
+    activeSessionRef.current = sessionCodeRef.current;
+    // A draft has nothing to load until its first message creates the session.
+    setLoading(Boolean(sessionCodeRef.current) && sessionStatus !== "offline");
   }, [
     contentEpoch,
+    conversationKey,
+    modelKey,
+    route.params.draft?.directoryCode,
     route.params.workspaceLabel,
-    sessionCode,
     sessionStatus,
   ]);
 
@@ -992,13 +1063,16 @@ export function ChatScreen({ navigation, route }: Props) {
 
   const reloadMessages = useCallback(
     async (options: { clearError?: boolean } = {}): Promise<ChatMessage[] | null> => {
-      if (!workspaceCode || sessionStatus !== "online") return null;
+      const targetSessionCode = sessionCodeRef.current;
+      if (!targetSessionCode || !workspaceCode || sessionStatus !== "online") {
+        return null;
+      }
       const sequence = ++messagesSeqRef.current;
       try {
         const next = await sessionRequest(({ tunnel }) =>
           listChatMessages({
             tunnel,
-            sessionCode,
+            sessionCode: targetSessionCode,
             workspaceCode,
             assistantCode: effectiveAssistantCode,
           }),
@@ -1051,10 +1125,17 @@ export function ChatScreen({ navigation, route }: Props) {
   }, [scrollToBottom]);
 
   const runMessage = useCallback(
-    async (rawContent: string, attachments: ChatAttachment[] = []) => {
+    async (
+      rawContent: string,
+      attachments: ChatAttachment[] = [],
+      targetSessionCode?: string,
+    ) => {
       const content = rawContent.trim();
+      // The first draft send passes the just-created session explicitly; the
+      // ref covers callers that run before the promotion re-render.
+      const activeCode = targetSessionCode ?? sessionCodeRef.current;
       if ((!content && !attachments.length) || sendingRef.current) return;
-      if (!workspaceCode || sessionStatus !== "online") {
+      if (!activeCode || !workspaceCode || sessionStatus !== "online") {
         setError(t("连接信息缺失或电脑离线，请返回重新连接节点"));
         return;
       }
@@ -1074,7 +1155,7 @@ export function ChatScreen({ navigation, route }: Props) {
       const optimistic: ChatMessage = {
         id: optimisticId,
         messageCode: optimisticId,
-        sessionCode,
+        sessionCode: activeCode,
         role: "USER",
         channel: "MAIN_AGENT",
         actor: "user",
@@ -1097,7 +1178,7 @@ export function ChatScreen({ navigation, route }: Props) {
           ({ tunnel }) =>
             sendChatMessageStream({
               tunnel,
-              sessionCode,
+              sessionCode: activeCode,
               workspaceCode,
               content,
               attachments,
@@ -1133,7 +1214,7 @@ export function ChatScreen({ navigation, route }: Props) {
                   setActiveRunId(null);
                   const requests = nativeUserInputRequests(
                     [event as Parameters<typeof nativeUserInputRequests>[0][number]],
-                    sessionCode,
+                    activeCode,
                   ).filter(
                     (request) =>
                       !answeredRequestIdsRef.current.has(request.requestId),
@@ -1172,7 +1253,7 @@ export function ChatScreen({ navigation, route }: Props) {
             }),
           { retry: false },
         );
-        if (!mountedRef.current || activeSessionRef.current !== sessionCode) {
+        if (!mountedRef.current || activeSessionRef.current !== activeCode) {
           return;
         }
 
@@ -1211,7 +1292,7 @@ export function ChatScreen({ navigation, route }: Props) {
             const synthetic: ChatMessage = {
               id: syntheticId,
               messageCode: syntheticId,
-              sessionCode,
+              sessionCode: activeCode,
               role: "ASSISTANT",
               channel: "MAIN_AGENT",
               actor: "assistant",
@@ -1232,7 +1313,7 @@ export function ChatScreen({ navigation, route }: Props) {
           );
         }
       } catch (sendError) {
-        if (!mountedRef.current || activeSessionRef.current !== sessionCode) {
+        if (!mountedRef.current || activeSessionRef.current !== activeCode) {
           return;
         }
 
@@ -1289,7 +1370,6 @@ export function ChatScreen({ navigation, route }: Props) {
       reloadMessages,
       reportRequestError,
       selectedModelOption,
-      sessionCode,
       sessionRequest,
       sessionStatus,
       t,
@@ -1300,6 +1380,139 @@ export function ChatScreen({ navigation, route }: Props) {
   useEffect(() => {
     runMessageRef.current = runMessage;
   }, [runMessage]);
+
+  /**
+   * Creates the real session behind a draft. Only the first message calls this,
+   * so an abandoned draft never reaches the node, matching Tron's behavior.
+   */
+  const ensureDraftSession = useCallback(
+    async (generation: number): Promise<ChatSession | null> => {
+      const existing = route.params.session;
+      if (existing) return existing;
+      const activeDraft = route.params.draft;
+      if (!activeDraft) return null;
+      const targetWorkspaceCode = activeDraft.workspaceCode || workspaceCode;
+      const created = await sessionRequest(({ tunnel }) =>
+        createChatSession({
+          tunnel,
+          workspaceCode: targetWorkspaceCode,
+          ...(activeDraft.projectCode
+            ? { projectCode: activeDraft.projectCode }
+            : {}),
+          ...(activeDraft.directoryCode
+            ? { directoryCode: activeDraft.directoryCode }
+            : {}),
+          ...(workingDirectoryCode ? { workingDirectoryCode } : {}),
+        }),
+      );
+
+      // The user may have switched conversations while `session.create` was in
+      // flight; never promote the screen that is now showing another chat.
+      if (
+        !mountedRef.current ||
+        conversationGenerationRef.current !== generation
+      ) {
+        return null;
+      }
+
+      // The composer already lets the user pick a model for the first turn;
+      // keep that choice on the real session instead of resetting it.
+      if (modelOptionCode || reasoningEffort) {
+        sessionModelChoices.set(created.sessionCode, {
+          optionCode: modelOptionCode,
+          effort: reasoningEffort,
+        });
+      }
+      sessionModelChoices.delete(activeDraft.draftCode);
+      sessionCodeRef.current = created.sessionCode;
+      activeSessionRef.current = created.sessionCode;
+      promotedSessionRef.current = true;
+      // Replace the draft params with the real session so the header, refresh,
+      // and any later navigation behave like an ordinary opened session.
+      if (mountedRef.current) {
+        navigation.setParams({
+          draft: undefined,
+          session: created,
+          workspaceCode: created.workspaceCode ?? targetWorkspaceCode,
+        });
+      }
+      return created;
+    },
+    [
+      modelOptionCode,
+      navigation,
+      reasoningEffort,
+      route.params.draft,
+      route.params.session,
+      sessionRequest,
+      workspaceCode,
+      workingDirectoryCode,
+    ],
+  );
+
+  const sendDraftMessage = useCallback(
+    async (content: string, attachments: ChatAttachment[]) => {
+      if (creatingSessionRef.current) return;
+      creatingSessionRef.current = true;
+      setCreatingSession(true);
+      setError(null);
+      const generation = conversationGenerationRef.current;
+      try {
+        const created = await ensureDraftSession(generation);
+        if (
+          !created ||
+          !mountedRef.current ||
+          generation !== conversationGenerationRef.current
+        ) {
+          return;
+        }
+
+        // Files chosen before the first send were staged locally because there
+        // was no session to own them yet. Upload them now and send their real
+        // attachment ids with the message.
+        let finalAttachments = attachments;
+        const staged = draftFilesRef.current;
+        if (staged.size) {
+          const stagedIds = new Set(staged.keys());
+          finalAttachments = attachments.filter(
+            (item) => !stagedIds.has(item.id),
+          );
+          for (const [tempId, file] of Array.from(staged.entries())) {
+            const uploaded = await uploadComposerFile(file, tempId);
+            // Keep the draft text and staged file so the user can retry.
+            if (!uploaded) return;
+            finalAttachments.push(uploaded);
+            staged.delete(tempId);
+          }
+        }
+
+        if (
+          !mountedRef.current ||
+          generation !== conversationGenerationRef.current
+        ) {
+          return;
+        }
+        setInput("");
+        setPendingAttachments([]);
+        setAttachmentPreviews({});
+        await runMessage(content, finalAttachments, created.sessionCode);
+      } catch (createError) {
+        if (mountedRef.current && !isAbortError(createError)) {
+          reportRequestError(createError);
+          setError(describeError(createError));
+        }
+      } finally {
+        creatingSessionRef.current = false;
+        if (mountedRef.current) setCreatingSession(false);
+      }
+    },
+    [
+      ensureDraftSession,
+      reportRequestError,
+      runMessage,
+      uploadComposerFile,
+    ],
+  );
 
   const handleSend = useCallback(() => {
     const content = input.trim();
@@ -1313,6 +1526,11 @@ export function ChatScreen({ navigation, route }: Props) {
       setError(t("连接信息缺失或电脑离线，请返回重新连接节点"));
       return;
     }
+    // A draft keeps its input and attachments until `session.create` succeeds.
+    if (isDraft) {
+      void sendDraftMessage(content, attachments);
+      return;
+    }
     setInput("");
     setPendingAttachments([]);
     setAttachmentPreviews({});
@@ -1320,9 +1538,11 @@ export function ChatScreen({ navigation, route }: Props) {
   }, [
     answering,
     input,
+    isDraft,
     pendingAttachments,
     pendingRequests.length,
     runMessage,
+    sendDraftMessage,
     sessionStatus,
     t,
     workspaceCode,
@@ -1656,12 +1876,19 @@ export function ChatScreen({ navigation, route }: Props) {
 
   const handleWorkingDirectoryChange = useCallback(
     async (directoryCode: string | null) => {
+      // A draft has no session yet; keep the choice and pass it to
+      // `session.create` with the first message.
+      if (!sessionCodeRef.current) {
+        setWorkingDirectoryCode(directoryCode);
+        setError(null);
+        return;
+      }
       try {
         const updated = await sessionRequest(
           ({ tunnel }) =>
             setChatWorkingDirectory({
               tunnel,
-              sessionCode,
+              sessionCode: sessionCodeRef.current,
               workspaceCode,
               assistantCode: effectiveAssistantCode,
               directoryCode,
@@ -1798,6 +2025,7 @@ export function ChatScreen({ navigation, route }: Props) {
   const canSend =
     (Boolean(input.trim()) || pendingAttachments.length > 0) &&
     !sending &&
+    !creatingSession &&
     !answering &&
     pendingRequests.length === 0 &&
     !loading &&
@@ -1874,12 +2102,14 @@ export function ChatScreen({ navigation, route }: Props) {
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={t("刷新消息")}
-                accessibilityState={{ disabled: sending || loading || disconnected }}
-                disabled={sending || loading || disconnected}
+                accessibilityState={{
+                  disabled: sending || loading || disconnected || isDraft,
+                }}
+                disabled={sending || loading || disconnected || isDraft}
                 onPress={() => void loadMessages(true)}
                 style={({ pressed }) => [
                   styles.headerIconButton,
-                  (sending || loading || disconnected) &&
+                  (sending || loading || disconnected || isDraft) &&
                     styles.headerIconButtonDisabled,
                   pressed && styles.pressed,
                 ]}
@@ -1942,8 +2172,10 @@ export function ChatScreen({ navigation, route }: Props) {
                 <View style={styles.bannerWrap}>
                   <InlineBanner
                     message={error}
-                    actionLabel={t("重试")}
-                    onAction={() => void loadMessages(true)}
+                    actionLabel={isDraft ? undefined : t("重试")}
+                    onAction={
+                      isDraft ? undefined : () => void loadMessages(true)
+                    }
                   />
                 </View>
               ) : null}
@@ -2111,7 +2343,9 @@ export function ChatScreen({ navigation, route }: Props) {
                         directoriesLoading
                       }
                       failed={directoriesFailed}
-                      fixedDirectoryCode={session.directoryCode ?? null}
+                      fixedDirectoryCode={
+                        session?.directoryCode ?? draft?.directoryCode ?? null
+                      }
                       labels={workspaceSelectorLabels}
                       loading={directoriesLoading}
                       onChange={handleWorkingDirectoryChange}
@@ -2155,6 +2389,7 @@ export function ChatScreen({ navigation, route }: Props) {
                 onPasteAttachment={queueComposerFile}
                 onPickAttachment={pickAttachment}
                 onRemoveAttachment={(id) => {
+                  draftFilesRef.current.delete(id);
                   setPendingAttachments((previous) =>
                     previous.filter((item) => item.id !== id),
                   );

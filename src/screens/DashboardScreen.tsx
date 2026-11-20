@@ -292,6 +292,7 @@ export function DashboardScreen({ navigation }: Props) {
         selectNode(item.node);
         navigation.navigate("Chat", {
           session,
+          draft: undefined,
           workspaceCode:
             session.workspaceCode ?? item.workspaceCode ?? "",
           assistantCode: item.assistant.assistantCode,
@@ -315,6 +316,7 @@ export function DashboardScreen({ navigation }: Props) {
         (item.session.sourceType ?? "").toUpperCase() === ASSISTANT_SOURCE_TYPE;
       navigation.navigate("Chat", {
         session: item.session,
+        draft: undefined,
         workspaceCode: item.workspaceCode || item.session.workspaceCode || "",
         assistantCode: isAssistant ? (item.session.sourceCode ?? null) : null,
         assistantName: null,

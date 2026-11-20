@@ -35,7 +35,7 @@ import {
   type Palette,
 } from "../theme";
 import { DrawerTree } from "./DrawerTree";
-import type { RootStackParamList } from "./types";
+import type { ChatDraft, RootStackParamList } from "./types";
 
 interface DrawerContextValue {
   isOpen: boolean;
@@ -109,6 +109,12 @@ interface AppDrawerProps {
     workspaceCode: string,
     workspaceLabel: string | null,
   ) => void;
+  onOpenDraft: (
+    node: SavedNode,
+    workspaceCode: string,
+    workspaceLabel: string | null,
+    context?: Pick<ChatDraft, "projectCode" | "directoryCode">,
+  ) => void;
 }
 
 export function AppDrawer({
@@ -117,6 +123,7 @@ export function AppDrawer({
   onOpenSettings,
   onScan,
   onOpenSession,
+  onOpenDraft,
 }: AppDrawerProps) {
   const { isOpen, closeDrawer } = useDrawer();
   const { palette } = useTheme();
@@ -240,7 +247,11 @@ export function AppDrawer({
             />
           </Pressable>
           <View style={styles.homeDivider} />
-          <DrawerTree active={isOpen} onOpenSession={onOpenSession} />
+          <DrawerTree
+            active={isOpen}
+            onOpenDraft={onOpenDraft}
+            onOpenSession={onOpenSession}
+          />
         </ScrollView>
       </Animated.View>
     </View>
